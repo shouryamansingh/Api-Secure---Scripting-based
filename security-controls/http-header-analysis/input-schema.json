@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HTTP Header Analysis — Input",
+  "description": "Data that must be provided to the AI agent (or to the control) before running the header analysis.",
+  "type": "object",
+  "required": ["formattedHeaders"],
+  "properties": {
+    "formattedHeaders": {
+      "type": "string",
+      "description": "A text block containing: target domain/URL context (optional), then 'Current Headers:' followed by lines of the form 'Header-Name: value'. This is the only required input for the LLM prompt."
+    },
+    "originalUrl": {
+      "type": "string",
+      "description": "Original API endpoint or page URL (for context and report display)."
+    },
+    "targetDomain": {
+      "type": "string",
+      "description": "Extracted domain from originalUrl (for context and report display)."
+    },
+    "originalHeaders": {
+      "type": "object",
+      "additionalProperties": { "type": "string" },
+      "description": "Raw response headers keyed by name. Used for fallback when AI parsing fails."
+    }
+  }
+}
