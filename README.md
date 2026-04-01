@@ -20,6 +20,7 @@ py app.py
 **2. Frontend** (separate terminal)
 ```bash
 cd "Main Project/frontend"
+cp .env.example .env   # edit .env with Firebase + Supabase keys
 npm install
 npm run dev
 ```
@@ -31,16 +32,19 @@ npm run dev
 
 ```
 Main Project/
-├── app.py                 # Flask app: /api/scan, /api/parse-urls, /api/health
-├── config.py              # Config from env (CORS, limits, timeouts)
+├── app.py                 # Flask app: /api/scan, /api/parse-urls, /api/execute-curl*, /api/health
+├── config.py              # Config from env (CORS, limits, timeouts, SMTP, Gmail OAuth)
 ├── scanner.py             # Scan logic: headers, CORS, SSL, server, error, tampering
-├── requirements.txt      # Python deps (pinned)
-├── .env.example           # Example env vars (copy to .env)
+├── email_service.py      # Send report email via SMTP or Gmail API (OAuth)
+├── requirements.txt      # Python deps (pinned; optional google-* for Gmail OAuth)
+├── .env.example           # Example env vars (copy to .env); includes email options
 ├── .gitignore             # Ignore .env, __pycache__, node_modules, etc.
 ├── SECURITY.md            # Security practices and reporting
 ├── README.md
-├── NEXT_STEPS.md          # What to do now (run, config, AI/email, production)
+├── NEXT_STEPS.md          # What to do now (run, config, email, production)
 ├── PLAN_FROM_N8N.md       # Plan to match n8n (AI, email, enhancements)
+├── docs/                  # Project visualization (project-visualization.html)
+├── scripts/               # One-time helpers (e.g. get_gmail_refresh_token.py)
 ├── security-controls/     # Modular prompts and config (http-header-analysis, etc.)
 ├── public/                # Static fallback for Flask /
 │   └── index.html
@@ -64,15 +68,27 @@ Main Project/
 | `MAX_URLS_PER_SCAN` | 50 | Max URLs per scan request |
 | `MAX_UPLOAD_SIZE_MB` | 5 | Max file size for CSV/Excel upload (MB) |
 | `SCANNER_TIMEOUT` | 15 | Outbound request timeout (seconds) |
+| Email (optional) | — | See **Email (report recipients)** above; `.env.example` lists SMTP and Gmail OAuth vars. |
+| `VITE_FIREBASE_*` | — | Firebase config for frontend auth (see `frontend/.env.example`) |
+| `VITE_SUPABASE_URL` | — | Supabase URL for frontend user profiles |
+| `VITE_SUPABASE_ANON_KEY` | — | Supabase anon key for frontend user profiles |
 
 Copy `.env.example` to `.env` and set as needed. Do not commit `.env`.
+
+### Email (report recipients)
+
+To send security reports to the **Report Recipients** you add in the Scanner UI, configure one of:
+
+- **SMTP** — Set `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` (and optionally `SMTP_FROM`, `SMTP_PORT`, `SMTP_USE_TLS`). Works with Gmail (App Password), Outlook, or any SMTP server.
+- **Gmail OAuth** — Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`, `GOOGLE_SENDER_EMAIL` from Google Cloud Console. Add redirect URIs `http://localhost:8080/` through `http://localhost:9999/` (see `.env.example`). Run `py scripts/get_gmail_refresh_token.py` once (sign in with the Gmail that will send) to obtain the refresh token.
 
 ## Features
 
 - **Input:** Single URL (manual) or list (paste URLs or upload CSV/Excel)
 - **Analyses:** HTTP headers, CORS (active/passive), SSL/TLS (SSL Labs), server version disclosure, improper error handling, URL tampering
-- **Reports:** Per-URL tabs; batch mode with URL selector
-- **API:** `POST /api/scan`, `POST /api/parse-urls`, `GET /api/health`
+- **Reports:** Per-URL tabs; batch mode with URL selector; optional email to Report Recipients (SMTP or Gmail OAuth)
+- **Token Generator:** Run curl commands; chain curls with token injection; scan the 2nd API with token; SSE event view
+- **API:** `POST /api/scan`, `POST /api/parse-urls`, `POST /api/execute-curl`, `POST /api/execute-curl-chain`, `GET /api/health`
 
 ---
 
@@ -100,5 +116,5 @@ Serve `frontend/dist` and point API to your backend. Set `FLASK_ENV=production` 
 
 ## Tech stack
 
-- **Backend:** Python 3.8+, Flask, requests, openpyxl, python-dotenv
+- **Backend:** Python 3.8+, Flask, requests, openpyxl, python-dotenv; optional google-auth, google-api-python-client for Gmail OAuth email
 - **Frontend:** React 18, Vite 5

@@ -2,12 +2,13 @@
 Security scanner: headers, CORS, SSL/TLS, server disclosure, error handling, URL tampering.
 Uses config for timeouts when available.
 """
+import os
 import re
 import ssl
 import socket
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -15,6 +16,8 @@ try:
     from config import SCANNER_TIMEOUT
 except ImportError:
     SCANNER_TIMEOUT = 15
+
+SSL_LABS_EMAIL = os.environ.get("SSL_LABS_EMAIL", "").strip()
 
 try:
     from urllib3.exceptions import InsecureRequestWarning
@@ -85,7 +88,7 @@ def get_header(headers, name: str):
     return str(val).strip() or None
 
 
-def fetch_url(url: str, origin=None, follow_redirects=True):
+def fetch_url(url: str, origin=None, follow_redirects=True, extra_headers=None, method="GET", body=None):
     req_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -93,28 +96,40 @@ def fetch_url(url: str, origin=None, follow_redirects=True):
     }
     if origin and str(origin).strip():
         req_headers["Origin"] = str(origin).strip()
-    resp = requests.get(
-        url,
-        allow_redirects=follow_redirects,
-        headers=req_headers,
-        timeout=SCANNER_TIMEOUT,
-        verify=False,
-    )
+    if extra_headers and isinstance(extra_headers, dict):
+        for k, v in extra_headers.items():
+            if k and v is not None and str(v).strip():
+                req_headers[k] = str(v).strip()
+    method = (method or "GET").upper()
+    kwargs = {
+        "url": url,
+        "allow_redirects": follow_redirects,
+        "headers": req_headers,
+        "timeout": SCANNER_TIMEOUT,
+        "verify": False,
+    }
+    if body is not None and method in ("POST", "PUT", "PATCH"):
+        kwargs["data"] = body
+    resp = requests.request(method, **kwargs)
     # Use plain dict so header iteration is reliable on all platforms
     out_headers = _normalize_headers(dict(resp.headers))
     return out_headers, resp.text, resp.status_code
 
 
-def fetch_options(url: str, origin: str):
+def fetch_options(url: str, origin: str, extra_headers=None, request_method="GET"):
     """Send OPTIONS preflight request with Origin. Returns normalized headers or None on failure."""
     if not origin or not str(origin).strip():
         return None
     req_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Origin": str(origin).strip(),
-        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Method": (request_method or "GET").upper(),
         "Accept": "*/*",
     }
+    if extra_headers and isinstance(extra_headers, dict):
+        for k, v in extra_headers.items():
+            if k and v is not None and str(v).strip():
+                req_headers[k] = str(v).strip()
     try:
         resp = requests.options(
             url,
@@ -166,22 +181,30 @@ def _headers_from_response(resp) -> dict:
     return _normalize_headers(raw)
 
 
-def run_headers_analysis(url: str) -> dict:
+def run_headers_analysis(url: str, extra_headers=None, method="GET", body=None) -> dict:
     target_domain = get_domain(url)
     req_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
+    if extra_headers and isinstance(extra_headers, dict):
+        for k, v in extra_headers.items():
+            if k and v is not None and str(v).strip():
+                req_headers[k] = str(v).strip()
+    method = (method or "GET").upper()
     best_headers = {}
     for follow_redirects in (True, False):
         try:
-            resp = requests.get(
-                url,
-                allow_redirects=follow_redirects,
-                headers=req_headers,
-                timeout=SCANNER_TIMEOUT,
-                verify=False,
-            )
+            kwargs = {
+                "url": url,
+                "allow_redirects": follow_redirects,
+                "headers": req_headers,
+                "timeout": SCANNER_TIMEOUT,
+                "verify": False,
+            }
+            if body is not None and method in ("POST", "PUT", "PATCH"):
+                kwargs["data"] = body
+            resp = requests.request(method, **kwargs)
             # dict(resp.headers) then normalize so we reliably read all headers
             h = _normalize_headers(dict(resp.headers))
             if _count_security_headers_present(h) > _count_security_headers_present(best_headers):
@@ -229,7 +252,7 @@ def run_headers_analysis(url: str) -> dict:
         "siteUrl": target_domain,
         "targetDomain": target_domain,
         "originalUrl": url,
-        "scannedAt": datetime.utcnow().isoformat() + "Z",
+        "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "evaluatedHeaders": evaluated_headers,
         "criticalCount": critical_count,
         "warningCount": warning_count,
@@ -243,16 +266,6 @@ def run_headers_analysis(url: str) -> dict:
         "aiContentNotes": "Content analysis is available when AI is enabled.",
         "totalHeaders": total_headers,
     }
-
-
-def _normalize_headers(headers: dict) -> dict:
-    if not headers or not isinstance(headers, dict):
-        return {}
-    out = {}
-    for k, v in headers.items():
-        key = k.lower()
-        out[key] = v[0] if isinstance(v, (list, tuple)) else v
-    return out
 
 
 def analyze_cors_from_response(url: str, origin_sent, headers: dict) -> dict:
@@ -302,7 +315,7 @@ def analyze_cors_from_response(url: str, origin_sent, headers: dict) -> dict:
         "vulnerabilities": [],
         "configuration": configuration,
         "allHeaders": headers or {},
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
     }
 
     highest_risk = 0
@@ -430,16 +443,16 @@ def analyze_cors_from_response(url: str, origin_sent, headers: dict) -> dict:
     return analysis
 
 
-def run_cors_analysis(url: str, origin_sent=None) -> dict:
+def run_cors_analysis(url: str, origin_sent=None, extra_headers=None, method="GET", body=None) -> dict:
     # Passive: no origin sent. Active: user-provided origin.
     sent_origin = (origin_sent or "").strip() or None
-    headers, _, _ = fetch_url(url, origin=sent_origin)
+    headers, _, _ = fetch_url(url, origin=sent_origin, extra_headers=extra_headers, method=method, body=body)
     options_headers = None
     cors_from_preflight = False
 
     # When testing with an origin, also send OPTIONS preflight; merge CORS headers if GET had none
     if sent_origin:
-        options_headers = fetch_options(url, sent_origin)
+        options_headers = fetch_options(url, sent_origin, extra_headers=extra_headers, request_method=method or "GET")
         if options_headers:
             norm_get = headers if isinstance(headers, dict) else {}
             acao_get = (norm_get.get("access-control-allow-origin") or "").strip()
@@ -490,7 +503,7 @@ def _header_severity(header_name: str, value: str) -> str:
         if has_version:
             return "High"
         if any(x in v for x in ["apache", "nginx", "iis", "jetty", "tomcat"]):
-            return "Medium"
+            return "Low"  # Name-only: tech is known but no version to correlate with CVEs
         return "Low"
     if "via" in name_lower:
         return "Low" if "cloudflare" in v or "akamai" in v else "Medium"
@@ -661,16 +674,36 @@ def _server_disclosure_risk(found: dict, possible_versions: dict) -> tuple:
         risk = "Low"
         justification = "Limited disclosure; framework or server type may be visible without exact versions."
 
-    recs = [
-        "Disable the 'X-Powered-By' header in the PHP configuration to prevent language version disclosure.",
-        "Configure the web server (Nginx/Apache) to suppress version strings in the 'Server' response header.",
-        "Remove WordPress 'Link' headers pointing to the REST API and the 'generator' meta tag from the HTML source.",
-        "Use Cloudflare Transform Rules to strip sensitive headers (Server, X-Powered-By) before they reach the client.",
-        "Restrict access to the WordPress XML-RPC and REST API endpoints to authorized IP addresses or authenticated users only.",
-        "Implement a strict Content Security Policy (CSP) and other security headers (HSTS, X-Frame-Options, X-Content-Type-Options) to mitigate exploit attempts.",
-    ]
-    if possible_versions.get("Runtime Environment") or "X-Powered-By" in disclosure_indicators:
-        recs.insert(0, "In PHP: set expose_php = Off in php.ini. In ASP.NET: remove X-Powered-By / X-AspNet-Version.")
+    # Build recommendations only for technologies that were actually detected
+    server_val_r = str(found.get("Server") or "").lower()
+    via_val_r    = str(found.get("Via") or "").lower()
+    powered_val_r = str(found.get("X-Powered-By") or "").lower()
+    link_val_r   = str(found.get("Link") or "").lower()
+
+    is_nginx      = "nginx"      in server_val_r
+    is_apache     = "apache"     in server_val_r
+    is_iis        = "iis"        in server_val_r
+    is_php        = "php"        in powered_val_r
+    is_wordpress  = "wp-json"    in link_val_r or "wordpress" in (link_val_r + powered_val_r)
+    is_cloudflare = "cloudflare" in (server_val_r + via_val_r)
+
+    recs = []
+    if is_nginx:
+        recs.append("Set `server_tokens off;` in the Nginx http or server block to suppress the version string from the Server header.")
+    if is_apache:
+        recs.append("Set `ServerTokens Prod` and `ServerSignature Off` in httpd.conf or .htaccess to hide the Apache version.")
+    if is_iis:
+        recs.append("Add `<requestFiltering removeServerHeader='true' />` to web.config to remove the IIS Server header.")
+    if is_php:
+        recs.append("Set `expose_php = Off` in php.ini to prevent PHP version disclosure via the X-Powered-By header.")
+    if is_wordpress:
+        recs.append("Add hooks in functions.php to remove the WordPress generator meta tag and the REST API Link header.")
+    if is_cloudflare:
+        recs.append("Use a Cloudflare Transform Rule to strip or replace the Server header before responses reach clients.")
+    if "X-Powered-By" in disclosure_indicators and not is_php:
+        recs.append("Remove the X-Powered-By header to avoid disclosing the runtime environment.")
+    if not recs:
+        recs.append("Configure the web server to suppress or genericize the Server header value.")
     return risk, justification, recs, round(confidence, 1)
 
 
@@ -694,8 +727,28 @@ def _build_executive_summary(domain: str, found: dict, stack: str, risk_level: s
     return " ".join(parts)
 
 
-def run_server_disclosure_analysis(url: str) -> dict:
-    headers, body, status = fetch_url(url)
+def _filter_config_examples(found: dict) -> dict:
+    """Return only the CONFIG_EXAMPLES relevant to the technologies actually detected in headers."""
+    server_v  = str(found.get("Server") or "").lower()
+    via_v     = str(found.get("Via") or "").lower()
+    powered_v = str(found.get("X-Powered-By") or "").lower()
+    link_v    = str(found.get("Link") or "").lower()
+
+    relevant = {}
+    if "nginx"      in server_v:                                       relevant["Nginx"]      = CONFIG_EXAMPLES["Nginx"]
+    if "apache"     in server_v:                                       relevant["Apache"]     = CONFIG_EXAMPLES["Apache"]
+    if "iis"        in server_v:                                       relevant["IIS"]        = CONFIG_EXAMPLES["IIS"]
+    if "php"        in powered_v:                                      relevant["PHP"]        = CONFIG_EXAMPLES["PHP"]
+    if "wp-json"    in link_v or "wordpress" in (link_v + powered_v): relevant["WordPress"]  = CONFIG_EXAMPLES["WordPress"]
+    if "cloudflare" in (server_v + via_v):                             relevant["Cloudflare"] = CONFIG_EXAMPLES["Cloudflare"]
+    # Fallback: if we found headers but couldn't map to a known tech, show Nginx as a safe default
+    if not relevant and found:
+        relevant["Nginx"] = CONFIG_EXAMPLES["Nginx"]
+    return relevant
+
+
+def run_server_disclosure_analysis(url: str, extra_headers=None, method="GET", body=None) -> dict:
+    headers, resp_body, status = fetch_url(url, extra_headers=extra_headers, method=method, body=body)
     target_domain = get_domain(url)
     norm = _normalize_headers(headers)
     found = {}
@@ -726,12 +779,29 @@ def run_server_disclosure_analysis(url: str) -> dict:
 
     # Attack scenario, impact, likelihood
     has_version = any(VERSION_PATTERN.search(str(v)) for v in found.values())
-    attack_scenario = (
-        "An attacker can use the disclosed stack and version information to search for known CVEs and vendor advisories, then attempt targeted exploits (e.g. Remote Code Execution, Privilege Escalation, or Denial-of-Service) against the identified software versions."
-        if found else "No stack or version disclosure detected; reconnaissance value is limited."
+    if has_version:
+        attack_scenario = (
+            "An attacker can use the disclosed version information to search for known CVEs and vendor advisories, "
+            "then attempt targeted exploits (e.g. Remote Code Execution, Privilege Escalation, or Denial-of-Service) "
+            "against the identified software versions."
+        )
+    elif found:
+        attack_scenario = (
+            "An attacker can confirm which technology is in use, but without a version number they cannot directly "
+            "correlate with known CVEs. The disclosure reduces anonymity and aids fingerprinting."
+        )
+    else:
+        attack_scenario = "No stack or version disclosure detected; reconnaissance value is limited."
+
+    business_impact = (
+        "Targeted exploitation via known CVEs; reconnaissance facilitation; potential compliance finding."
+        if has_version else (
+            "Technology fingerprinting; minor reconnaissance value. No direct CVE mapping without a version number."
+            if found else "Minimal."
+        )
     )
-    business_impact = "Reconnaissance facilitation; targeted exploitation; potential compliance finding." if found else "Minimal."
-    likelihood = "High" if (has_version and len(found) >= 2) else ("Medium" if found else "Low")
+    # Likelihood: only Medium+ when a version is actually exposed
+    likelihood = "High" if (has_version and len(found) >= 2) else ("Medium" if has_version else ("Low" if found else "Informational"))
 
     # Remediation priority from risk
     priority_map = {"High": "P1", "Medium": "P2", "Low": "P3", "Informational": "P3"}
@@ -739,8 +809,7 @@ def run_server_disclosure_analysis(url: str) -> dict:
     verification_step = "After changing server or application configuration, re-run this scan and confirm that the listed headers are removed or show generic values only."
     expected_state = "Server: generic value or absent; X-Powered-By: absent; Link: no version or API disclosure; other version headers removed or generic."
 
-    # HTML disclosure checks
-    html_disclosures = _html_disclosure_checks(body or "")
+    html_disclosures = _html_disclosure_checks(resp_body or "")
 
     # Summary metrics: disclosure score 0-100, counts
     critical_high = sum(1 for d in disclosures if d.get("severity") in ("Critical", "High"))
@@ -760,7 +829,7 @@ def run_server_disclosure_analysis(url: str) -> dict:
         "targetDomain": target_domain,
         "domain": target_domain,
         "originalUrl": url,
-        "scannedAt": datetime.utcnow().isoformat() + "Z",
+        "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "findingId": f"{FINDING_ID_PREFIX}-001",
         "reportTitle": f"Server Version Disclosure Audit Report - {target_domain}",
         "disclosures": disclosures,
@@ -774,14 +843,18 @@ def run_server_disclosure_analysis(url: str) -> dict:
         "notes": notes,
         "recommendation": "Remove or genericize server/version headers to reduce information disclosure." if found else "No sensitive version headers detected.",
         "recommendations": recommendations,
-        "configurationExamples": CONFIG_EXAMPLES,
+        "configurationExamples": _filter_config_examples(found),
         "references": [
             "OWASP A06:2021 - Security Misconfiguration",
             "NIST SP 800-53 Rev.5 - CM-6 / SI-2",
             "CIS Benchmark - Web Server / Application Hardening",
         ],
         "affectedComponents": affected_components,
-        "cveNote": "Disclosed versions should be checked against CVE databases and vendor security advisories. Consider: https://cve.mitre.org/ or https://nvd.nist.gov/",
+        "cveNote": (
+            "Disclosed versions should be checked against CVE databases and vendor security advisories. "
+            "Consider: https://cve.mitre.org/ or https://nvd.nist.gov/"
+            if has_version else None
+        ),
         "attackScenario": attack_scenario,
         "businessImpact": business_impact,
         "likelihood": likelihood,
@@ -888,7 +961,7 @@ def _scan_body_for_indicators(body: str) -> list:
     return found
 
 
-def run_error_handling_check(url: str) -> dict:
+def run_error_handling_check(url: str, extra_headers=None, method="GET", body=None) -> dict:
     target_domain = get_domain(url)
     parsed = urllib.parse.urlparse(url)
     base = f"{parsed.scheme or 'https'}://{parsed.netloc}"
@@ -903,7 +976,7 @@ def run_error_handling_check(url: str) -> dict:
     base_result = {
         "targetDomain": target_domain,
         "originalUrl": url,
-        "scannedAt": datetime.utcnow().isoformat() + "Z",
+        "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
     }
     references = [
         "CWE-209: Information Exposure Through an Error Message",
@@ -917,16 +990,15 @@ def run_error_handling_check(url: str) -> dict:
     for probe_path in probe_paths:
         probe_url = base.rstrip("/") + ("/" + probe_path.lstrip("/"))
         try:
-            _, body, status = fetch_url(probe_url)
+            _, resp_body, status = fetch_url(probe_url, extra_headers=extra_headers, method=method, body=body)
             if worst_status is None or (status >= 500 and worst_status < 500) or status > (worst_status or 0):
                 worst_status = status
-            found_here = _scan_body_for_indicators(body)
+            found_here = _scan_body_for_indicators(resp_body)
             for item in found_here:
                 if not any(f["indicator"] == item["indicator"] and f.get("probeUrl") == probe_url for f in all_found):
                     all_found.append({**item, "probeUrl": probe_url})
-            # Keep first probe's body for snippet if we have findings and no snippet yet
-            if found_here and response_snippet is None and body:
-                snippet = (body[:500] + "…") if len(body) > 500 else body
+            if found_here and response_snippet is None and resp_body:
+                snippet = (resp_body[:500] + "…") if len(resp_body) > 500 else resp_body
                 # Sanitize: remove newlines for single-line preview, escape for safety
                 response_snippet = snippet.replace("\r", " ").replace("\n", " ").strip()[:400]
             probes_result.append({
@@ -1018,7 +1090,7 @@ def run_error_handling_check(url: str) -> dict:
 
 
 # --- URL tampering (simple: tampered path/query, check for info leak) ---
-def run_url_tampering_check(url: str) -> dict:
+def run_url_tampering_check(url: str, extra_headers=None, method="GET", body=None) -> dict:
     target_domain = get_domain(url)
     parsed = urllib.parse.urlparse(url)
     base = f"{parsed.scheme or 'https'}://{parsed.netloc}"
@@ -1029,14 +1101,14 @@ def run_url_tampering_check(url: str) -> dict:
     results = []
     for name, tampered_url, desc in tests:
         try:
-            _, body, status = fetch_url(tampered_url)
+            _, resp_body, status = fetch_url(tampered_url, extra_headers=extra_headers, method=method, body=body)
             # Heuristic: different status or long body might indicate different handling
             results.append({
                 "test": name,
                 "description": desc,
                 "tamperedUrl": tampered_url,
                 "statusCode": status,
-                "bodyLength": len(body or ""),
+                "bodyLength": len(resp_body or ""),
                 "note": "Check manually for sensitive data in response.",
             })
         except Exception as e:
@@ -1049,7 +1121,7 @@ def run_url_tampering_check(url: str) -> dict:
     return {
         "targetDomain": target_domain,
         "originalUrl": url,
-        "scannedAt": datetime.utcnow().isoformat() + "Z",
+        "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "tests": results,
         "recommendation": "Validate and sanitize all URL inputs; avoid reflecting user input in responses.",
     }
@@ -1113,7 +1185,7 @@ def _ts_to_iso(ts):
         return None
     try:
         sec = ts / 1000.0 if ts > 1e12 else ts
-        return datetime.utcfromtimestamp(sec).strftime("%a, %d %b %Y %H:%M:%S UTC")
+        return datetime.fromtimestamp(sec, tz=timezone.utc).strftime("%a, %d %b %Y %H:%M:%S UTC")
     except Exception:
         return str(ts)
 
@@ -1142,7 +1214,7 @@ def _parse_ssl_labs_full_report(data: dict, host: str, ssl_labs_url: str) -> dic
             "ipAddress": ip_address,
             "sslLabsUrl": ssl_labs_url,
             "reportTitle": f"SSL Report: {host}" + (f" ({ip_address})" if ip_address else ""),
-            "scannedAt": datetime.utcnow().isoformat() + "Z",
+            "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             "summary": f"Grade: {grade}. For full certificate and cipher details see the Qualys SSL Labs report linked below.",
             "recommendation": "Ensure TLS 1.2+ only and strong ciphers; fix any certificate issues.",
         }
@@ -1201,22 +1273,48 @@ def _parse_ssl_labs_full_report(data: dict, host: str, ssl_labs_url: str) -> dic
     reneg = details.get("renegSupport")
     reneg_secure = (reneg is not None and (reneg & 2) != 0) if reneg is not None else None
     reneg_insecure = (reneg is not None and (reneg & 1) != 0) if reneg is not None else None
-    session_resumption = details.get("sessionResumption")
     session_tickets = details.get("sessionTickets")
     session_ticket_ok = (session_tickets is not None and (session_tickets & 1) != 0) if session_tickets is not None else None
+    heartbleed = details.get("heartbleed")
+    poodle_tls = details.get("poodleTls")
+    poodle_tls_vuln = poodle_tls == 2 if poodle_tls is not None else None
+    robot = details.get("bleichenbacher")
+    robot_vuln = robot in (2, 3) if robot is not None else None
+    freak = details.get("freak")
+    logjam = details.get("logjam")
+    drown = details.get("drownVulnerable")
+    zombie_poodle = details.get("zombiePoodle")
+    zombie_vuln = zombie_poodle in (2, 3) if zombie_poodle is not None else None
+    golden_doodle = details.get("goldenDoodle")
+    golden_vuln = golden_doodle in (4, 5) if golden_doodle is not None else None
+    ticketbleed = details.get("ticketbleed")
+    ticketbleed_vuln = ticketbleed == 2 if ticketbleed is not None else None
+    zero_rtt = details.get("zeroRTTEnabled")
     protocol_details = [
         {"name": "Secure Renegotiation", "value": "Supported" if reneg_secure else "No", "ok": reneg_secure},
         {"name": "Insecure Client-Initiated Renegotiation", "value": "No" if not reneg_insecure else "Yes", "ok": not reneg_insecure},
         {"name": "BEAST (server-side)", "value": "Not mitigated" if details.get("vulnBeast") else "No", "ok": not details.get("vulnBeast")},
         {"name": "POODLE (SSLv3)", "value": "No" if not details.get("poodle") else "Yes", "ok": not details.get("poodle")},
+        {"name": "POODLE (TLS)", "value": "Vulnerable" if poodle_tls_vuln else ("No" if poodle_tls_vuln is not None else "N/A"), "ok": not poodle_tls_vuln if poodle_tls_vuln is not None else None},
         {"name": "Downgrade prevention (TLS_FALLBACK_SCSV)", "value": "Yes" if details.get("fallbackScsv") else "No", "ok": details.get("fallbackScsv")},
         {"name": "SSL/TLS compression", "value": "No" if not details.get("compressionMethods") else "Yes", "ok": not details.get("compressionMethods")},
         {"name": "RC4", "value": "No" if not details.get("supportsRc4") else "Yes", "ok": not details.get("supportsRc4")},
+        {"name": "Heartbleed (CVE-2014-0160)", "value": "Vulnerable" if heartbleed else ("No" if heartbleed is not None else "N/A"), "ok": not heartbleed if heartbleed is not None else None},
+        {"name": "ROBOT (Bleichenbacher)", "value": "Vulnerable" if robot_vuln else ("No" if robot_vuln is not None else "N/A"), "ok": not robot_vuln if robot_vuln is not None else None},
+        {"name": "FREAK", "value": "Vulnerable" if freak else ("No" if freak is not None else "N/A"), "ok": not freak if freak is not None else None},
+        {"name": "Logjam", "value": "Vulnerable" if logjam else ("No" if logjam is not None else "N/A"), "ok": not logjam if logjam is not None else None},
+        {"name": "DROWN", "value": "Vulnerable" if drown else ("No" if drown is not None else "N/A"), "ok": not drown if drown is not None else None},
+        {"name": "Zombie POODLE", "value": "Vulnerable" if zombie_vuln else ("No" if zombie_vuln is not None else "N/A"), "ok": not zombie_vuln if zombie_vuln is not None else None},
+        {"name": "GOLDENDOODLE", "value": "Vulnerable" if golden_vuln else ("No" if golden_vuln is not None else "N/A"), "ok": not golden_vuln if golden_vuln is not None else None},
+        {"name": "Ticketbleed (CVE-2016-9244)", "value": "Vulnerable" if ticketbleed_vuln else ("No" if ticketbleed_vuln is not None else "N/A"), "ok": not ticketbleed_vuln if ticketbleed_vuln is not None else None},
         {"name": "Forward Secrecy", "value": "Yes" if (details.get("forwardSecrecy") or 0) > 0 else "No", "ok": (details.get("forwardSecrecy") or 0) > 0},
         {"name": "ALPN", "value": (details.get("alpnProtocols") or "No").replace(" ", ", ") if details.get("alpnProtocols") else "No", "ok": bool(details.get("alpnProtocols"))},
         {"name": "NPN", "value": (details.get("npnProtocols") or "No").replace(" ", ", ") if details.get("npnProtocols") else "No", "ok": bool(details.get("npnProtocols"))},
         {"name": "Session resumption (tickets)", "value": "Yes" if session_ticket_ok else "No", "ok": session_ticket_ok},
+        {"name": "0-RTT (TLS 1.3)", "value": "Enabled" if zero_rtt == 1 else ("Disabled" if zero_rtt == 0 else "N/A"), "ok": zero_rtt != 1 if zero_rtt is not None else None},
     ]
+    # Remove rows where value is "N/A" (test not applicable/not run)
+    protocol_details = [d for d in protocol_details if d["value"] != "N/A"]
     # Handshake simulation
     sims = details.get("sims") or {}
     sim_results = sims.get("results") or []
@@ -1254,7 +1352,7 @@ def _parse_ssl_labs_full_report(data: dict, host: str, ssl_labs_url: str) -> dic
         "ipAddress": ip_address,
         "sslLabsUrl": ssl_labs_url,
         "reportTitle": f"SSL Report: {host}" + (f" ({ip_address})" if ip_address else ""),
-        "scannedAt": datetime.utcnow().isoformat() + "Z",
+        "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "summary": f"Grade: {grade}. For full certificate, cipher suite, and chain details see the Qualys SSL Labs report linked below.",
         "recommendation": "Ensure TLS 1.2+ only and strong ciphers; fix any certificate issues.",
         "certificates": certificates,
@@ -1271,103 +1369,197 @@ def _parse_ssl_labs_full_report(data: dict, host: str, ssl_labs_url: str) -> dic
     }
 
 
+def _build_local_fallback(host: str, ssl_labs_url: str, context: str = "") -> dict:
+    """Run a local TLS check and build a report dict from its results."""
+    local = _local_ssl_check(host)
+    grade = local.get("localGrade") or "N/A (local)"
+    status = local.get("localStatus") or ""
+    protocol = local.get("protocol") or local.get("error") or "unknown"
+    summary = f"{context + ' ' if context else ''}Local check: {status}. Negotiated protocol: {protocol}."
+    if local.get("cipher"):
+        summary += f" Cipher: {local['cipher']}."
+    summary += " For full certificate and cipher details, see the Qualys SSL Labs report linked below."
+    return {
+        "host": host,
+        "error": False,
+        "grade": grade,
+        "endpointGrade": grade,
+        "sslLabsUrl": ssl_labs_url,
+        "reportTitle": f"SSL Report: {host}",
+        "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+        "summary": summary,
+        "recommendation": "Prefer TLS 1.2 or 1.3 only; disable TLS 1.0/1.1. Use SSL Labs when available for certificate and cipher details.",
+        "localProtocol": local.get("protocol"),
+        "localCipher": local.get("cipher"),
+        "localGrade": grade,
+        "localStatus": status,
+        "localError": local.get("error"),
+    }
+
+
+def _ssl_labs_endpoints_usable(data: dict) -> bool:
+    """Return True if at least one SSL Labs endpoint has a real grade or populated protocols."""
+    for ep in data.get("endpoints") or []:
+        if ep.get("grade"):
+            return True
+        det = ep.get("details") or {}
+        if det.get("protocols") and len(det["protocols"]) > 0:
+            return True
+    return False
+
+
+def _enrich_with_local_tls(report: dict, host: str) -> dict:
+    """When SSL Labs returns minimal data, supplement with local TLS handshake info."""
+    if report.get("localProtocol") or report.get("certificates"):
+        return report
+    try:
+        local = _local_ssl_check(host)
+        if local.get("protocol") and local["protocol"] != "connection failed":
+            report["localProtocol"] = local.get("protocol")
+            report["localCipher"] = local.get("cipher")
+            report["localGrade"] = local.get("localGrade")
+            report["localStatus"] = local.get("localStatus")
+            if report.get("grade") in (None, "N/A"):
+                report["grade"] = local.get("localGrade") or report.get("grade")
+                report["endpointGrade"] = report["grade"]
+            ctx = f"Local TLS handshake: {local.get('localStatus', '')}. Protocol: {local.get('protocol', '?')}."
+            if local.get("cipher"):
+                ctx += f" Cipher: {local['cipher']}."
+            report["summary"] = ctx + " " + (report.get("summary") or "")
+    except Exception:
+        pass
+    return report
+
+
+def _poll_ssl_labs(api_base: str, host: str, req_kw: dict) -> dict:
+    """Poll SSL Labs /analyze until READY or ERROR, then return the response data."""
+    data = None
+    for attempt in range(20):
+        params = {"host": host, "fromCache": "on", "all": "done", "maxAge": 24}
+        r = requests.get(f"{api_base}/analyze", params=params, **req_kw)
+        if r.status_code == 441:
+            raise ValueError("SSL_LABS_NOT_REGISTERED")
+        if r.status_code == 429:
+            time.sleep(15)
+            continue
+        if r.status_code in (503, 529):
+            time.sleep(20)
+            continue
+        r.raise_for_status()
+        data = r.json()
+        status = data.get("status")
+        if status in ("READY", "ERROR"):
+            break
+        # DNS / IN_PROGRESS — wait before next poll (variable backoff)
+        time.sleep(5 if attempt < 3 else 10)
+    return data or {"status": "ERROR", "statusMessage": "No response from SSL Labs"}
+
+
+def _process_ssl_labs_response(data: dict, host: str, ssl_labs_url: str, api_version: str) -> dict:
+    """Turn a READY SSL Labs response into a report dict."""
+    status = data.get("status")
+
+    if status == "ERROR":
+        raise RuntimeError(data.get("statusMessage") or "SSL Labs returned an error")
+
+    if status != "READY":
+        raise RuntimeError(f"SSL Labs not ready (status={status})")
+
+    if _ssl_labs_endpoints_usable(data):
+        report = _parse_ssl_labs_full_report(data, host, ssl_labs_url)
+        # Enrich grade from endpoint level (v3/v4 store grade per endpoint, not at top level)
+        if report.get("grade") in (None, "N/A"):
+            for ep in data.get("endpoints") or []:
+                if ep.get("grade"):
+                    report["grade"] = ep["grade"]
+                    report["endpointGrade"] = ep["grade"]
+                    break
+        # Supplement with local TLS if Labs returned READY but no cert/protocol data
+        if not report.get("certificates") and not report.get("protocols"):
+            report = _enrich_with_local_tls(report, host)
+        report["_apiVersion"] = api_version
+        return report
+
+    # READY but no usable endpoint data — collect endpoint messages
+    ep_messages = []
+    for ep in data.get("endpoints") or []:
+        msg = ep.get("statusMessage", "")
+        ip = ep.get("ipAddress", "")
+        if msg:
+            ep_messages.append(f"{ip}: {msg}" if ip else msg)
+    ep_note = "; ".join(ep_messages) if ep_messages else "SSL Labs could not reach the server"
+    raise RuntimeError(f"SSL Labs endpoints not usable: {ep_note}")
+
+
 def run_ssl_analysis(url_or_host: str) -> dict:
     host = get_domain(url_or_host).split(":")[0]
     if not host or host == "Unknown":
         return {"error": True, "message": "Invalid host", "host": url_or_host}
-    api_base = "https://api.ssllabs.com/api/v3"
-    req_kw = {"timeout": 10, "verify": False}
-    try:
-        r = requests.get(f"{api_base}/analyze", params={"host": host, "fromCache": "on", "all": "done", "maxAge": 48}, **req_kw)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("status") == "ERROR":
-            return {
-                "host": host,
-                "error": True,
-                "message": data.get("statusMessage") or "SSL Labs returned an error",
-                "scannedAt": datetime.utcnow().isoformat() + "Z",
-            }
-        if data.get("status") in ("ERROR", "DNS"):
-            return {
-                "host": host,
-                "error": True,
-                "message": data.get("statusMessage") or data.get("status") or "Analysis failed",
-                "scannedAt": datetime.utcnow().isoformat() + "Z",
-            }
-        if data.get("status") != "READY":
-            try:
-                local = _local_ssl_check(host)
-                grade = local.get("localGrade") or "N/A (local)"
-                status = local.get("localStatus") or ""
-                protocol = local.get("protocol") or local.get("error") or "unknown"
-                summary = f"Local check: {status}. Negotiated protocol: {protocol}."
-                if local.get("cipher"):
-                    summary += f" Cipher: {local['cipher']}."
-                summary += " For full certificate and cipher details, see the Qualys SSL Labs report linked below."
-                return {
-                    "host": host,
-                    "error": False,
-                    "grade": grade,
-                    "endpointGrade": grade,
-                    "sslLabsUrl": f"https://www.ssllabs.com/ssltest/analyze.html?d={host}",
-                    "reportTitle": f"SSL Report: {host}",
-                    "scannedAt": datetime.utcnow().isoformat() + "Z",
-                    "summary": summary,
-                    "recommendation": "Prefer TLS 1.2 or 1.3 only; disable TLS 1.0/1.1. Use SSL Labs when available for certificate and cipher details.",
-                    "localProtocol": local.get("protocol"),
-                    "localCipher": local.get("cipher"),
-                    "localGrade": grade,
-                    "localStatus": status,
-                    "localError": local.get("error"),
-                }
-            except Exception:
-                return {
-                    "host": host,
-                    "error": True,
-                    "message": "SSL Labs not ready and local check failed",
-                    "scannedAt": datetime.utcnow().isoformat() + "Z",
-                }
-        ssl_labs_url = f"https://www.ssllabs.com/ssltest/analyze.html?d={host}"
-        return _parse_ssl_labs_full_report(data, host, ssl_labs_url)
-    except requests.RequestException as e:
+
+    ssl_labs_url = f"https://www.ssllabs.com/ssltest/analyze.html?d={host}"
+    req_kw_base = {"timeout": 15, "verify": False}
+
+    # ---- Attempt SSL Labs v4 (requires registered email) ----
+    if SSL_LABS_EMAIL:
         try:
-            local = _local_ssl_check(host)
-            grade = local.get("localGrade") or "N/A (local)"
-            status = local.get("localStatus") or ""
-            protocol = local.get("protocol") or local.get("error") or "unknown"
-            summary = f"SSL Labs API was unavailable. Local check: {status}. Protocol: {protocol}."
-            if local.get("cipher"):
-                summary += f" Cipher: {local['cipher']}."
-            summary += " Use the link below for a full SSL Labs report when their API is available."
-            return {
-                "host": host,
-                "error": False,
-                "grade": grade,
-                "endpointGrade": grade,
-                "sslLabsUrl": f"https://www.ssllabs.com/ssltest/analyze.html?d={host}",
-                "reportTitle": f"SSL Report: {host}",
-                "scannedAt": datetime.utcnow().isoformat() + "Z",
-                "summary": summary,
-                "recommendation": "Prefer TLS 1.2 or 1.3 only; disable older protocols. For certificate and full cipher analysis, run the SSL Labs test via the link below when their API is up.",
-                "localProtocol": local.get("protocol"),
-                "localCipher": local.get("cipher"),
-                "localGrade": grade,
-                "localStatus": status,
-                "localError": local.get("error"),
-            }
+            req_kw_v4 = {**req_kw_base, "headers": {"email": SSL_LABS_EMAIL}}
+            data = _poll_ssl_labs("https://api.ssllabs.com/api/v4", host, req_kw_v4)
+            return _process_ssl_labs_response(data, host, ssl_labs_url, "v4")
+        except ValueError as e:
+            if "SSL_LABS_NOT_REGISTERED" in str(e):
+                pass  # email not registered yet — fall through to v3
+        except RuntimeError as e:
+            ep_note = str(e)
+            try:
+                report = _build_local_fallback(host, ssl_labs_url, f"SSL Labs v4: {ep_note}.")
+                # Collect endpoint messages if any
+                return report
+            except Exception:
+                pass
+        except requests.RequestException:
+            pass  # Network error — try v3
+        except Exception:
+            pass
+
+    # ---- Attempt SSL Labs v3 (legacy, deprecated Jan 2024, still partially functional) ----
+    try:
+        data = _poll_ssl_labs("https://api.ssllabs.com/api/v3", host, req_kw_base)
+        return _process_ssl_labs_response(data, host, ssl_labs_url, "v3")
+    except RuntimeError as e:
+        ep_note = str(e)
+        ep_messages = []
+        try:
+            report = _build_local_fallback(host, ssl_labs_url, f"SSL Labs: {ep_note}.")
+            report["endpointMessages"] = ep_messages
+            if not SSL_LABS_EMAIL:
+                report["_needsV4Email"] = True
+            return report
         except Exception:
             return {
-                "host": host,
-                "error": True,
+                "host": host, "error": False,
+                "grade": "N/A",
+                "sslLabsUrl": ssl_labs_url,
+                "reportTitle": f"SSL Report: {host}",
+                "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                "summary": f"SSL Labs: {ep_note}. Local TLS check also failed.",
+                "recommendation": "Ensure the server accepts HTTPS connections on port 443.",
+                "_needsV4Email": not bool(SSL_LABS_EMAIL),
+            }
+    except requests.RequestException as e:
+        try:
+            report = _build_local_fallback(host, ssl_labs_url, f"SSL Labs API unavailable ({type(e).__name__}).")
+            if not SSL_LABS_EMAIL:
+                report["_needsV4Email"] = True
+            return report
+        except Exception:
+            return {
+                "host": host, "error": True,
                 "message": str(e) or "SSL Labs request failed",
-                "scannedAt": datetime.utcnow().isoformat() + "Z",
+                "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
             }
     except Exception as e:
-        # Ensure we always return a dict so the backend never gets a missing sslReport
         return {
-            "host": host,
-            "error": True,
+            "host": host, "error": True,
             "message": str(e) or "SSL analysis failed",
-            "scannedAt": datetime.utcnow().isoformat() + "Z",
+            "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         }
