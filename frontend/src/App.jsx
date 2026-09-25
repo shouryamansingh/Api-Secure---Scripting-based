@@ -4,9 +4,10 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { Terminal, Copy, Check, ChevronRight, Loader2, Plus, X, Play, ArrowLeft, Send, Shield, Sun, Moon, Settings, HelpCircle, LogOut, ScanSearch, Workflow, MailCheck, FileSearch, CheckCircle2, ShieldCheck, Lock, Globe, Server, AlertTriangle, Link2, EyeOff, Zap, ListChecks, Clock, Target, SlidersHorizontal, Info } from 'lucide-react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './lib/firebase';
-import { getUserProfile } from './utils/userProfile';
-import { signOut } from './lib/auth-supabase';
+import { fetchUserProfileStrict } from './utils/userProfile';
+import { signOut, hasPasswordProvider } from './lib/auth';
 import LoginPage from './components/LoginPage';
+import ProfileSetup from './components/ProfileSetup';
 import WelcomeScreen from './components/WelcomeScreen';
 import OpticalAnimation from './components/OpticalAnimation';
 import Sidebar from './components/Sidebar';
@@ -3707,14 +3708,35 @@ export default function App() {
   const [showWelcome, setShowWelcome] = useState(false);
   const [showOptical, setShowOptical] = useState(false);
   const [showApp, setShowApp] = useState(false);
+  // Signed-in Firebase user who still has to set a username + password
+  const [setupUser, setSetupUser] = useState(null);
+  const [checkingProfile, setCheckingProfile] = useState(false);
 
   // On mount: listen to Firebase auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        // User is signed in — fetch Supabase profile
+        setCheckingProfile(true);
+        let profile = null;
+        let profileKnown = true;
         try {
-          const profile = await getUserProfile(firebaseUser.uid);
+          profile = await fetchUserProfileStrict(firebaseUser.uid);
+        } catch (err) {
+          console.error('Could not load profile:', err);
+          profileKnown = false;
+        }
+
+        // A missing password always requires setup; a missing profile only
+        // when we could actually check (so an outage doesn't lock users out).
+        const needsSetup = !hasPasswordProvider(firebaseUser) || (profileKnown && !profile);
+
+        if (needsSetup) {
+          setSetupUser(firebaseUser);
+          setIsAuthenticated(false);
+          setUser(null);
+          setShowApp(false);
+        } else {
+          setSetupUser(null);
           setUser({
             uid: firebaseUser.uid,
             email: firebaseUser.email,
@@ -3723,18 +3745,12 @@ export default function App() {
           });
           setIsAuthenticated(true);
           setShowApp(true); // Skip animation on refresh
-        } catch {
-          setUser({
-            uid: firebaseUser.uid,
-            email: firebaseUser.email,
-            displayName: firebaseUser.displayName || 'User',
-            photoURL: firebaseUser.photoURL || '',
-          });
-          setIsAuthenticated(true);
-          setShowApp(true);
         }
+        setCheckingProfile(false);
       } else {
         // Not signed in
+        setSetupUser(null);
+        setCheckingProfile(false);
         setIsAuthenticated(false);
         setUser(null);
         setShowApp(false);
@@ -3750,6 +3766,11 @@ export default function App() {
     setIsAuthenticated(true);
     setShowWelcome(true); // Start welcome → animation → app sequence
   }, []);
+
+  const handleSetupComplete = useCallback((userData) => {
+    setSetupUser(null);
+    handleLogin(userData);
+  }, [handleLogin]);
 
   const handleWelcomeComplete = useCallback(() => {
     setShowWelcome(false);
@@ -3767,13 +3788,14 @@ export default function App() {
     } catch {}
     setIsAuthenticated(false);
     setUser(null);
+    setSetupUser(null);
     setShowWelcome(false);
     setShowOptical(false);
     setShowApp(false);
   }, []);
 
   // Loading state while checking auth
-  if (authLoading) {
+  if (authLoading || checkingProfile) {
     return (
       <div className="auth-loading-screen">
         <div className="auth-loading-inner">
@@ -3781,6 +3803,19 @@ export default function App() {
           <p className="auth-loading-text">Loading...</p>
         </div>
       </div>
+    );
+  }
+
+  // Signed in with Google but no password/profile yet — setup can't be skipped
+  if (setupUser) {
+    return (
+      <ProfileSetup
+        firebaseUser={setupUser}
+        theme={theme}
+        toggleTheme={toggleTheme}
+        onComplete={handleSetupComplete}
+        onCancel={handleLogout}
+      />
     );
   }
 

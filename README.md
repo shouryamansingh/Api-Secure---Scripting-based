@@ -2,7 +2,7 @@
 
 **Python (Flask)** backend + **React (Vite)** frontend for API security scanning: headers, CORS, SSL/TLS, server disclosure, error handling, URL tampering. Minimalist black & white theme with light/dark toggle. Configuration via environment variables; see [SECURITY.md](./SECURITY.md) for secure coding practices.
 
-**→ [SETUP.md](./SETUP.md)** — **start here**: full step-by-step setup from scratch (Python, Node, Firebase login, Supabase, running locally, troubleshooting).  
+**→ [SETUP.md](./SETUP.md)** — **start here**: full step-by-step setup from scratch (Python, Node, Firebase login and Firestore profiles, running locally, troubleshooting).  
 **→ [security-controls/](./security-controls/)** — modular security control definitions (prompts, config, schemas) for HTTP Header Analysis; usable in n8n or in-app AI.
 
 ## Quick start
@@ -19,7 +19,7 @@ py app.py
 **2. Frontend** (separate terminal)
 ```bash
 cd "Main Project/frontend"
-cp .env.example .env   # edit .env with Firebase + Supabase keys
+cp .env.example .env   # edit .env with your Firebase keys
 npm install
 npm run dev
 ```
@@ -69,9 +69,6 @@ Main Project/
 | `SCANNER_TIMEOUT` | 15 | Outbound request timeout (seconds) |
 | Email (optional) | — | See **Email (report recipients)** above; `.env.example` lists SMTP and Gmail OAuth vars. |
 | `VITE_FIREBASE_*` | — | Firebase config for frontend auth (see `frontend/.env.example`) |
-| `VITE_SUPABASE_URL` | — | Supabase URL for frontend user profiles |
-| `VITE_SUPABASE_ANON_KEY` | — | Supabase anon key for frontend user profiles |
-
 Copy `.env.example` to `.env` and set as needed. Do not commit `.env`.
 
 ### Email (report recipients)

@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@splinetool/react-spline": "^4.1.0",
-    "@supabase/supabase-js": "^2.99.0",
     "firebase": "^12.10.0",
     "framer-motion": "^12.35.2",
     "lucide-react": "^0.575.0",

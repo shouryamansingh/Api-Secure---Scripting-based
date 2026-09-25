@@ -1,24 +1,44 @@
-import { supabase } from "../lib/supabase";
+import { doc, getDoc, updateDoc, runTransaction } from "firebase/firestore";
+import { db } from "../lib/firebase";
+
+/*
+ * Firestore layout:
+ *   users/{uid}             profile (username, email, Google details, timestamps)
+ *   usernames/{lowercase}   { uid, email } — reserves a username and lets the
+ *                           login form turn a username into an email
+ */
+const userRef = (uid) => doc(db, "users", uid);
+const usernameRef = (username) => doc(db, "usernames", username.trim().toLowerCase());
+
+const firestoreErrorMessage = (error, fallback) => {
+  switch (error?.code) {
+    case "permission-denied":
+      return "Firebase blocked access to your profile. Check the Firestore security rules (see SETUP.md).";
+    case "not-found":
+    case "failed-precondition":
+      return "The Firestore database isn't set up yet. Create it in Firebase Console → Firestore Database (see SETUP.md).";
+    case "unavailable":
+      return "Can't reach Firebase right now. Check your connection and try again.";
+    default:
+      return error?.message || fallback;
+  }
+};
 
 /**
- * Get user profile from Supabase
+ * Get user profile. Throws when Firestore can't be reached, so callers can
+ * tell "no profile yet" (null) apart from "couldn't check".
+ */
+export async function fetchUserProfileStrict(uid) {
+  const snap = await getDoc(userRef(uid));
+  return snap.exists() ? snap.data() : null;
+}
+
+/**
+ * Get user profile, or null if it doesn't exist or can't be loaded.
  */
 export async function getUserProfile(uid) {
   try {
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("id", uid)
-      .single();
-
-    if (error) {
-      if (error.code === "PGRST116") {
-        return null;
-      }
-      throw error;
-    }
-
-    return data;
+    return await fetchUserProfileStrict(uid);
   } catch (error) {
     console.error("Error fetching user profile:", error);
     return null;
@@ -26,7 +46,8 @@ export async function getUserProfile(uid) {
 }
 
 /**
- * Save or update user profile in Supabase
+ * Save or update user profile. The username is reserved in the same
+ * transaction, so two accounts can never end up with the same username.
  */
 export async function saveUserProfile(
   uid,
@@ -36,59 +57,52 @@ export async function saveUserProfile(
   googlePhotoUrl,
   googleEmail
 ) {
+  const trimmedEmail = email.trim();
+  const trimmedUsername = username.trim();
+  const usernameKey = trimmedUsername.toLowerCase();
+  const trimmedGoogleEmail = googleEmail?.trim();
+
   try {
-    const trimmedEmail = email.trim();
-    const trimmedUsername = username.trim();
-    const trimmedGoogleEmail = googleEmail?.trim();
+    await runTransaction(db, async (tx) => {
+      const [userSnap, nameSnap] = await Promise.all([
+        tx.get(userRef(uid)),
+        tx.get(usernameRef(usernameKey)),
+      ]);
 
-    // Check if user already exists
-    const { data: existingUser, error: checkError } = await supabase
-      .from("users")
-      .select("*")
-      .or(`id.eq.${uid},email.eq.${trimmedEmail}`)
-      .maybeSingle();
-
-    if (checkError && checkError.code !== "PGRST116") {
-      return { success: false, error: checkError.message || "Failed to check existing user" };
-    }
-
-    const profileData = {
-      id: uid,
-      email: trimmedEmail,
-      username: trimmedUsername,
-      google_connected: !!googleEmail,
-      has_password: true,
-      last_login: new Date().toISOString(),
-    };
-
-    if (googleDisplayName) profileData.google_display_name = googleDisplayName;
-    if (googlePhotoUrl) profileData.google_photo_url = googlePhotoUrl;
-    if (trimmedGoogleEmail) profileData.google_email = trimmedGoogleEmail;
-
-    let result;
-
-    if (existingUser) {
-      result = await supabase.from("users").update(profileData).eq("id", uid);
-    } else {
-      profileData.created_at = new Date().toISOString();
-      result = await supabase.from("users").insert([profileData]);
-    }
-
-    if (result.error) {
-      if (result.error.code === "23505") {
-        if (result.error.message.includes("users_email_key")) {
-          return { success: false, error: "This email is already registered." };
-        }
-        if (result.error.message.includes("users_username_key")) {
-          return { success: false, error: "This username is already taken." };
-        }
+      if (nameSnap.exists() && nameSnap.data().uid !== uid) {
+        throw Object.assign(new Error("Username taken"), { code: "app/username-taken" });
       }
-      return { success: false, error: result.error.message || "Failed to save profile" };
-    }
 
+      const previous = userSnap.exists() ? userSnap.data() : null;
+      if (previous?.usernameLower && previous.usernameLower !== usernameKey) {
+        tx.delete(usernameRef(previous.usernameLower));
+      }
+
+      const now = new Date().toISOString();
+      const profileData = {
+        id: uid,
+        email: trimmedEmail,
+        username: trimmedUsername,
+        usernameLower: usernameKey,
+        google_connected: !!googleEmail,
+        has_password: true,
+        last_login: now,
+      };
+      if (!previous) profileData.created_at = now;
+      if (googleDisplayName) profileData.google_display_name = googleDisplayName;
+      if (googlePhotoUrl) profileData.google_photo_url = googlePhotoUrl;
+      if (trimmedGoogleEmail) profileData.google_email = trimmedGoogleEmail;
+
+      tx.set(usernameRef(usernameKey), { uid, email: trimmedEmail });
+      tx.set(userRef(uid), profileData, { merge: true });
+    });
     return { success: true };
   } catch (error) {
-    return { success: false, error: error.message || "Failed to save profile" };
+    if (error.code === "app/username-taken") {
+      return { success: false, error: "This username is already taken." };
+    }
+    console.error("Error saving user profile:", error);
+    return { success: false, error: firestoreErrorMessage(error, "Failed to save profile") };
   }
 }
 
@@ -97,29 +111,30 @@ export async function saveUserProfile(
  */
 export async function updateLastLogin(uid) {
   try {
-    await supabase
-      .from("users")
-      .update({ last_login: new Date().toISOString() })
-      .eq("id", uid);
+    await updateDoc(userRef(uid), { last_login: new Date().toISOString() });
   } catch (error) {
     console.error("Error updating last login:", error);
   }
 }
 
 /**
- * Check if username is available
+ * Check if username is available. Returns true/false, or null when it
+ * couldn't be checked (the save transaction still enforces uniqueness).
  */
 export async function isUsernameAvailable(username, excludeUid) {
   try {
-    let query = supabase.from("users").select("id").eq("username", username);
-    if (excludeUid) {
-      query = query.neq("id", excludeUid);
-    }
-    const { data, error } = await query;
-    if (error) throw error;
-    return !data || data.length === 0;
+    const snap = await getDoc(usernameRef(username));
+    return !snap.exists() || (!!excludeUid && snap.data().uid === excludeUid);
   } catch (error) {
     console.error("Error checking username:", error);
-    return false;
+    return null;
   }
+}
+
+/**
+ * Look up the email registered for a username (used by username login).
+ */
+export async function getEmailForUsername(username) {
+  const snap = await getDoc(usernameRef(username));
+  return snap.exists() ? snap.data().email || null : null;
 }

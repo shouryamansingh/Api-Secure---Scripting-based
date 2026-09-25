@@ -70,6 +70,11 @@ This step is easy to miss, and login will **not** work without it.
 5. Flip the **Enable** switch on.
 6. Pick a **Project support email** from the dropdown.
 7. Click **Save**.
+8. Back in the provider list, click **Email/Password**, flip **Enable** on (leave
+   "Email link" off), and click **Save**.
+
+The second provider is needed because every new user sets a password right after their
+first Google sign-in. Without it, that step shows "Password sign-in isn't enabled".
 
 ### 2b. Allow localhost
 
@@ -103,46 +108,56 @@ const firebaseConfig = {
 
 ---
 
-## Step 3 — Create a Supabase project (for user profiles)
+## Step 3 — Create the Firestore database (for user profiles)
 
-Firebase handles the login itself; Supabase stores the username and profile details.
+Everything lives in Firebase. Authentication handles login, and Firestore (Firebase's
+database) stores each user's username and profile details.
 
-1. Go to [supabase.com](https://supabase.com/), sign in, and click **New project**.
-2. Pick any name and password, then wait for it to finish setting up.
+Do this in the **same Firebase project** whose keys you put in `frontend/.env`.
 
-### 3a. Create the `users` table
+1. In the Firebase Console sidebar, click **Build → Firestore Database**.
+2. Click **Create database**, pick a location close to your users, and choose
+   **Start in production mode**. Click **Create**. (If the page already shows data
+   tabs instead of a **Create database** button, the database exists — skip to 3.)
+3. Open the **Rules** tab, **delete everything already there**, paste the rules below,
+   and click **Publish**:
 
-1. In the left sidebar, click **SQL Editor**.
-2. Paste the following and click **Run**:
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
 
-```sql
-create table users (
-  id text primary key,
-  email text unique not null,
-  username text unique not null,
-  google_connected boolean default false,
-  google_display_name text,
-  google_photo_url text,
-  google_email text,
-  has_password boolean default false,
-  created_at timestamptz default now(),
-  last_login timestamptz
-);
+    // Each user can only read and write their own profile.
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
 
--- The app talks to Supabase from the browser, so allow access with the public key.
-alter table users enable row level security;
-
-create policy "allow read" on users for select using (true);
-create policy "allow insert" on users for insert with check (true);
-create policy "allow update" on users for update using (true);
+    // Username reservations. Readable by anyone so people can log in with a
+    // username (it is turned into an email before signing in).
+    match /usernames/{name} {
+      allow read: if true;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow update: if request.auth != null
+                    && resource.data.uid == request.auth.uid
+                    && request.resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.uid == request.auth.uid;
+    }
+  }
+}
 ```
 
-The `id` column holds the Firebase user ID, which is what links the two services together.
+4. Wait about 30 seconds for the rules to take effect.
 
-### 3b. Copy your Supabase keys
+> **Don't skip the rules.** "Production mode" blocks everything by default. Without
+> these rules, a new user's password setup fails with *"Firebase blocked access to your
+> profile"*. If that happens, publish the rules, wait 30 seconds, and click
+> **Save password & continue** again. No reload or new sign-in is needed.
 
-1. Click **Project Settings → API**.
-2. Copy the **Project URL** and the **anon / public** key. You need both in Step 4.
+The app creates two collections by itself; you don't need to add anything else:
+
+- `users/{uid}` holds the profile (username, email, Google name and photo, timestamps).
+- `usernames/{username}` reserves each username so no two people can take the same one.
 
 ---
 
@@ -155,8 +170,8 @@ cd "Main Project/frontend"
 cp .env.example .env
 ```
 
-Open `frontend/.env` in any text editor and fill in the nine values using what you
-copied in Steps 2c and 3b:
+Open `frontend/.env` in any text editor and fill in the seven values using what you
+copied in Step 2c:
 
 ```
 VITE_FIREBASE_API_KEY=<apiKey>
@@ -166,8 +181,6 @@ VITE_FIREBASE_STORAGE_BUCKET=<storageBucket>
 VITE_FIREBASE_MESSAGING_SENDER_ID=<messagingSenderId>
 VITE_FIREBASE_APP_ID=<appId>
 VITE_FIREBASE_MEASUREMENT_ID=<measurementId>
-VITE_SUPABASE_URL=<Project URL>
-VITE_SUPABASE_ANON_KEY=<anon public key>
 ```
 
 Paste the values plainly — no quotes, no spaces around the `=`.
@@ -289,7 +302,10 @@ insights once suitable infrastructure or an LLM service is available.
 | "The Firebase API key is invalid" | A key is wrong or missing | Recheck `frontend/.env` against Step 2c, then restart the frontend |
 | Sign-in popup opens then closes instantly | Browser blocked the popup | Allow popups for `localhost` |
 | "Cannot reach the backend" | Backend is not running | Start Terminal 1 from Step 5 and leave it open |
-| Login works but profile fails to save | `users` table missing or blocking access | Rerun the SQL in **Step 3a** |
+| "Firebase blocked access to your profile" | Firestore security rules not published (or published in a different project) | Paste and **Publish** the rules in **Step 3**, wait 30 seconds, then click **Save password & continue** again |
+| "The Firestore database isn't set up yet" | Firestore was never created | Do **Step 3** (Create database, then rules) |
+| "Password sign-in isn't enabled for this app yet" | The Email/Password provider is off | Redo **Step 2a**, point 8 (enable **Email/Password**) |
+| "This username is already taken" | Someone else reserved that username | Pick a different username |
 | Changed `.env` but nothing happened | Settings load only at startup | Stop the frontend and run `npm run dev` again |
 | `Port 3001 is in use` | An old copy is still running | Close the old terminal, or find and stop it: `lsof -i :3001` |
 
