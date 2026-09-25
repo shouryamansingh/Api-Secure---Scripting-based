@@ -1,0 +1,25 @@
+# Sensitive Permissions-Policy features. For each feature, the scanner checks
+# whether the policy contains "<feature>=*" (emits pp-permissive-<feature>) or
+# "<feature>=(self)" (emits pp-self-<feature>).
+#
+# Keys are the feature names; values are human-readable descriptions used in
+# the finding messages. Iteration order matters: it controls the order of
+# findings appended in the original code (which is dict insertion order).
+
+camera: camera access
+microphone: microphone access
+geolocation: location tracking
+payment: payment API
+usb: USB device access
+magnetometer: magnetometer sensor
+gyroscope: gyroscope sensor
+accelerometer: accelerometer sensor
+autoplay: media autoplay
+display-capture: screen capture
+fullscreen: fullscreen API
+screen-wake-lock: screen wake lock
+xr-spatial-tracking: VR/AR spatial tracking
+midi: MIDI device access
+hid: HID device access
+serial: serial port access
+bluetooth: Bluetooth access

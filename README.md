@@ -2,8 +2,7 @@
 
 **Python (Flask)** backend + **React (Vite)** frontend for API security scanning: headers, CORS, SSL/TLS, server disclosure, error handling, URL tampering. Minimalist black & white theme with light/dark toggle. Configuration via environment variables; see [SECURITY.md](./SECURITY.md) for secure coding practices.
 
-**→ [NEXT_STEPS.md](./NEXT_STEPS.md)** — what to do now (run locally, optional config, AI/email checklist, production).  
-**→ [PLAN_FROM_N8N.md](./PLAN_FROM_N8N.md)** — plan to match the n8n workflow (AI, email, optional enhancements).  
+**→ [SETUP.md](./SETUP.md)** — **start here**: full step-by-step setup from scratch (Python, Node, Firebase login, Supabase, running locally, troubleshooting).  
 **→ [security-controls/](./security-controls/)** — modular security control definitions (prompts, config, schemas) for HTTP Header Analysis; usable in n8n or in-app AI.
 
 ## Quick start
@@ -89,6 +88,18 @@ To send security reports to the **Report Recipients** you add in the Scanner UI,
 - **Reports:** Per-URL tabs; batch mode with URL selector; optional email to Report Recipients (SMTP or Gmail OAuth)
 - **Token Generator:** Run curl commands; chain curls with token injection; scan the 2nd API with token; SSE event view
 - **API:** `POST /api/scan`, `POST /api/parse-urls`, `POST /api/execute-curl`, `POST /api/execute-curl-chain`, `GET /api/health`
+
+---
+
+## About the analysis engine (no LLM)
+
+Reports are produced by lightweight, rule-based scripting and basic analysis (`template_analysis.py`) — no external or locally hosted LLM is used.
+
+- A local LLM such as BART could be integrated for AI-based analysis in the future. However, the backend is currently deployed on Render's free tier, which has resource limitations and cannot host an LLM model of 3 GB or larger.
+- Using external LLM APIs would also introduce additional usage costs.
+- The current implementation has therefore been intentionally built on rule-based analysis.
+
+The existing architecture can be extended in the future to support AI-powered analysis, intelligent vulnerability interpretation, automated recommendations, and more advanced security insights once suitable infrastructure or an appropriate LLM service is available. (`ai_service.py` and the `OPENROUTER_*` settings are kept for that purpose but are not called by the app today.)
 
 ---
 

@@ -231,51 +231,114 @@ _EXEC_SUMMARY_TEMPLATES = {
 }
 
 
-def _evaluate_header_severity(name: str, info: dict) -> tuple[str, str, str, str]:
+def _evaluate_header_severity(name: str, info: dict) -> tuple:
     """
-    Returns (severity, whatItDoes, status, risk, fix) for a single header
-    based on its raw scanner data.
+    Returns (severity, whatItDoes, status, risk, fix, finding_details) for a single header.
+    Consumes the deep-analysis `findings` list from the scanner when available.
     """
     kb = _HEADER_KB.get(name, {})
     present = info.get("present", False)
     value = (info.get("value") or "").strip()
     raw_severity = (info.get("severity") or "").lower()
+    findings = info.get("findings") or []
 
     what_it_does = kb.get("whatItDoes", f"A security header that controls {name} browser behaviour.")
     fix = kb.get("fix", "Consult the OWASP Secure Headers Project for the recommended value.")
 
-    if raw_severity == "ok" or present and raw_severity not in ("critical", "warning"):
-        severity = "ok"
-        status = "Properly configured and protecting your site."
-        risk = "No immediate risk — this protection is active."
-        fix_out = "No action needed."
-    elif raw_severity == "warning" or (present and value):
-        severity = "warning"
-        status = f"Present but may be weakly configured. Current value: {value[:80] if value else 'set'}."
-        risk = kb.get("weakRisk", "Weak configuration reduces the effectiveness of this protection.")
-        fix_out = f"Review and tighten the configuration. Recommended value: {fix}"
-    else:
+    if not present:
         severity = "critical"
         status = "Not configured — this protection is completely missing from your site."
         risk = kb.get("missingRisk", "This missing header leaves your site exposed to common browser-level attacks.")
         fix_out = f"Add this header to your server response. Recommended value: {fix}"
+        return severity, what_it_does, status, risk, fix_out, []
 
-    return severity, what_it_does, status, risk, fix_out
+    high_findings = [f for f in findings if f.get("severity") in ("high", "critical")]
+    med_findings = [f for f in findings if f.get("severity") == "medium"]
+    low_findings = [f for f in findings if f.get("severity") in ("low", "info")]
+
+    if high_findings or med_findings:
+        severity = "warning"
+        issue_titles = [f["title"] for f in high_findings + med_findings]
+        status = (
+            f"Present but has configuration weaknesses: {'; '.join(issue_titles[:3])}."
+            + (f" Current value: {value[:60]}..." if len(value) > 60 else f" Current value: {value}." if value else "")
+        )
+        risk_parts = [f["detail"] for f in high_findings[:2]] or [f["detail"] for f in med_findings[:2]]
+        risk = " ".join(risk_parts)
+        fix_parts = []
+        for f in high_findings + med_findings:
+            fid = f.get("id", "")
+            if "csp-unsafe-inline" == fid:
+                fix_parts.append("Remove 'unsafe-inline' from script-src; use nonce-based or hash-based CSP instead.")
+            elif "csp-unsafe-eval" == fid:
+                fix_parts.append("Remove 'unsafe-eval' from script-src; refactor code to avoid eval().")
+            elif "csp-unsafe-hashes" == fid:
+                fix_parts.append("Review use of 'unsafe-hashes'; prefer nonce-based CSP for event handlers.")
+            elif "data-script" in fid:
+                fix_parts.append("Remove 'data:' from script-src — it allows full script injection via data URIs.")
+            elif "data-connect" in fid:
+                fix_parts.append("Remove 'data:' from connect-src to prevent data exfiltration bypasses.")
+            elif "blob-script" in fid:
+                fix_parts.append("Remove 'blob:' from script-src if not required by your application.")
+            elif "csp-wildcard" in fid:
+                fix_parts.append("Replace wildcard '*' with specific, trusted origins in all CSP directives.")
+            elif "csp-http-" in fid:
+                fix_parts.append("Replace http:// sources with https:// to prevent mixed content and MITM attacks.")
+            elif "base-uri" in fid:
+                fix_parts.append("Add base-uri 'self' to your CSP to prevent base tag injection.")
+            elif "object-src" in fid:
+                fix_parts.append("Add object-src 'none' to block legacy plugin embeds.")
+            elif "form-action" in fid:
+                fix_parts.append("Add form-action 'self' to prevent form submission to attacker-controlled origins.")
+            elif "no-default-src" in fid:
+                fix_parts.append("Add a default-src directive as the fallback for all unlisted resource types.")
+            elif "unsafe-inline-style" in fid:
+                fix_parts.append("Remove 'unsafe-inline' from style-src where possible; use nonces for inline styles.")
+            elif "max-age" in fid:
+                fix_parts.append("Increase max-age to at least 31536000 (1 year) for HSTS preload eligibility.")
+            elif "hsts-no-subdomains" in fid:
+                fix_parts.append("Add includeSubDomains to cover all subdomains with HSTS.")
+            elif "allow-from" in fid:
+                fix_parts.append("Replace ALLOW-FROM with CSP frame-ancestors directive (modern browser support).")
+            elif "xxss-disabled" in fid or ("disabled" in fid and "xxss" in fid):
+                fix_parts.append("Set X-XSS-Protection to '1; mode=block' or rely on a strong CSP.")
+            elif "rp-invalid" in fid:
+                fix_parts.append(f"Use a valid Referrer-Policy value. Recommended: {fix}")
+            elif "permissive" in fid or "pp-" in fid:
+                fix_parts.append(f"Tighten the policy: {f.get('detail', '')[:80]}")
+            elif "invalid" in fid:
+                fix_parts.append(f"Set the correct value. Recommended: {fix}")
+            else:
+                fix_parts.append(f"{f.get('detail', '')[:100]}")
+        fix_out = " ".join(fix_parts[:4]) if fix_parts else f"Review and tighten the configuration. Recommended value: {fix}"
+    elif low_findings:
+        severity = "ok"
+        status = f"Configured with minor notes: {'; '.join(f['title'] for f in low_findings[:2])}."
+        risk = "No significant risk — minor improvements possible."
+        notes = [f["detail"] for f in low_findings[:2]]
+        fix_out = " ".join(notes)
+    else:
+        severity = "ok"
+        status = "Properly configured and protecting your site."
+        risk = "No immediate risk — this protection is active."
+        fix_out = "No action needed."
+
+    return severity, what_it_does, status, risk, fix_out, findings
 
 
-def analyze_headers_template(evaluated_headers: dict, target_domain: str) -> dict:
+def analyze_headers_template(evaluated_headers: dict, target_domain: str,
+                              extra_findings: list | None = None) -> dict:
     """
     Instant template-based analysis. Returns the same shape as ai_service.analyze_headers().
     Always succeeds — no network calls, no API keys, no latency.
+    Consumes deep-analysis findings from the scanner for richer reports.
     """
     headers_out = []
     critical_count = 0
     warning_count = 0
     ok_count = 0
 
-    # Process all headers in KB order so the output is always consistent
     header_order = list(_HEADER_KB.keys())
-    # Add any extra headers from the scan that aren't in the KB
     for name in (evaluated_headers or {}):
         if name not in header_order:
             header_order.append(name)
@@ -285,7 +348,9 @@ def analyze_headers_template(evaluated_headers: dict, target_domain: str) -> dic
         if info is None:
             info = {"present": False, "severity": "critical", "value": None}
 
-        sev, what_it_does, status, risk, fix_out = _evaluate_header_severity(name, info)
+        result = _evaluate_header_severity(name, info)
+        sev, what_it_does, status, risk, fix_out = result[0], result[1], result[2], result[3], result[4]
+        header_findings = result[5] if len(result) > 5 else []
         value = info.get("value") or None
 
         if sev == "critical":
@@ -304,14 +369,14 @@ def analyze_headers_template(evaluated_headers: dict, target_domain: str) -> dic
             "status": status,
             "risk": risk,
             "fix": fix_out,
-            # Legacy fields (kept for backward compat with old renderer)
+            "findings": header_findings,
             "description": what_it_does,
             "issue": status,
             "impact": risk,
             "recommendation": fix_out,
         })
 
-    # Overall risk
+    # Overall risk — factor in warnings (misconfigured headers) as well
     if critical_count >= 6:
         overall_risk = "Critical"
     elif critical_count >= 4:
@@ -320,37 +385,72 @@ def analyze_headers_template(evaluated_headers: dict, target_domain: str) -> dic
         overall_risk = "Medium"
     elif critical_count >= 1:
         overall_risk = "Low"
+    elif warning_count >= 2:
+        overall_risk = "Low"
     else:
         overall_risk = "Good"
 
     risk_explanations = {
-        "Critical": "Your API is missing most security protections and is highly vulnerable to common attacks.",
-        "High": "Your API has several critical security protections missing, leaving it vulnerable to common attacks.",
-        "Medium": "Your API is missing some important security protections that should be addressed soon.",
-        "Low": "Your API has minor security gaps that are easy to fix.",
-        "Good": "Your API has all critical security protections in place.",
+        "Critical": (
+            f"Your site is critically exposed — {critical_count} of 10 security headers are missing. "
+            "Attackers could intercept connections, inject malicious code, steal sessions, and perform "
+            "clickjacking with minimal effort. Immediate remediation is required."
+        ),
+        "High": (
+            f"Your site has {critical_count} critical security headers missing, leaving it vulnerable "
+            "to script injection, connection interception, and clickjacking. These are high-priority fixes."
+        ),
+        "Medium": (
+            f"Your site is missing {critical_count} important security header(s). While some protections "
+            "are in place, the gaps create real attack opportunities that should be addressed soon."
+        ),
+        "Low": (
+            f"Your site has a mostly solid configuration with {critical_count} missing header(s)"
+            + (f" and {warning_count} header(s) with configuration weaknesses" if warning_count else "")
+            + ". Addressing these will complete your baseline security hardening."
+        ),
+        "Good": (
+            "All critical security headers are properly configured."
+            + (f" {warning_count} header(s) have minor configuration notes — see details below." if warning_count else "")
+            + " Your site has strong baseline protection."
+        ),
     }
 
-    # Executive summary
     exec_summary = _EXEC_SUMMARY_TEMPLATES.get(overall_risk, "").format(
         domain=target_domain, critical=critical_count
     )
 
-    # Top recommendations — only critical/warning, sorted by KB priority
+    # Append a findings-aware paragraph to the executive summary
+    warn_headers = [h for h in headers_out if h["severity"] == "warning"]
+    if warn_headers:
+        weak_names = [h["name"] for h in warn_headers]
+        exec_summary += (
+            f"\n\nAdditionally, {len(warn_headers)} header(s) are present but have configuration weaknesses "
+            f"that reduce their effectiveness: {', '.join(weak_names)}. "
+            "See the detailed findings below for specific issues and remediation steps."
+        )
+
+    # Top recommendations — critical first, then warnings, sorted by KB priority
     issue_headers = [h for h in headers_out if h["severity"] in ("critical", "warning")]
-    issue_headers.sort(key=lambda h: _HEADER_KB.get(h["name"], {}).get("priority", 99))
+    issue_headers.sort(key=lambda h: (0 if h["severity"] == "critical" else 1,
+                                       _HEADER_KB.get(h["name"], {}).get("priority", 99)))
     top_recs = []
     for i, h in enumerate(issue_headers[:5], start=1):
         kb = _HEADER_KB.get(h["name"], {})
+        if h["severity"] == "critical":
+            action = f"Add the {h['name']} header to your server configuration."
+            why = kb.get("missingRisk", "")[:150]
+        else:
+            action = f"Fix configuration weaknesses in {h['name']}."
+            why = h.get("risk", kb.get("weakRisk", ""))[:150]
         top_recs.append({
             "priority": i,
             "header": h["name"],
-            "action": f"Add the {h['name']} header to your server configuration.",
-            "why": kb.get("missingRisk", "")[:120] if h["severity"] == "critical" else kb.get("weakRisk", "")[:120],
+            "action": action,
+            "why": why,
             "exampleValue": kb.get("fix", ""),
         })
 
-    # Plain text notes for email/export
     crit_names = [h["name"] for h in headers_out if h["severity"] == "critical"]
     warn_names = [h["name"] for h in headers_out if h["severity"] == "warning"]
     ok_names = [h["name"] for h in headers_out if h["severity"] == "ok"]
@@ -375,5 +475,6 @@ def analyze_headers_template(evaluated_headers: dict, target_domain: str) -> dic
         "aiRiskExplanation": risk_explanations.get(overall_risk, ""),
         "aiTopRecs": top_recs,
         "aiHeaderNotes": "\n".join(notes_lines),
-        "aiSource": "template",  # flag so frontend knows this is template-based, not LLM
+        "aiSource": "template",
+        "extraFindings": extra_findings or [],
     }

@@ -1,0 +1,41 @@
+# Headers that, when present, leak information useful to attackers.
+# Finding id is "info-leak-<lowercased header name>".
+#
+# Procedural detail preserved in Python:
+#   - Title gets " (<first 40 chars of header value>)" appended.
+# Detail is used verbatim.
+
+X-Runtime:
+  severity: low
+  title: X-Runtime discloses processing time
+  detail: "Reveals server-side processing time, which can be used for timing attacks to enumerate valid resources or user accounts."
+
+X-Request-Id:
+  severity: info
+  title: X-Request-Id exposes internal request identifier
+  detail: "Internal request IDs can help attackers correlate requests across systems or aid in social engineering support staff."
+
+X-Correlation-Id:
+  severity: info
+  title: X-Correlation-Id exposes internal correlation identifier
+  detail: "Internal correlation IDs can reveal distributed tracing information to external users."
+
+Via:
+  severity: low
+  title: Via header discloses proxy/gateway information
+  detail: "The Via header reveals internal proxy or gateway infrastructure details, helping attackers map your network architecture."
+
+X-Cache:
+  severity: info
+  title: X-Cache reveals caching layer details
+  detail: "Exposes whether the response was served from cache and can reveal CDN or reverse proxy identity."
+
+X-Served-By:
+  severity: low
+  title: X-Served-By discloses internal server hostname
+  detail: "Reveals internal server identifiers, helping attackers map infrastructure and target specific nodes."
+
+X-Backend-Server:
+  severity: low
+  title: X-Backend-Server discloses backend identity
+  detail: "Reveals the backend application server identity to external users."

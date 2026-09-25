@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Terminal, Copy, Check, ChevronRight, Loader2, Plus, X, Play, ArrowLeft, Mail, Send } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { Terminal, Copy, Check, ChevronRight, Loader2, Plus, X, Play, ArrowLeft, Send, Shield, Sun, Moon, Settings, HelpCircle, LogOut, ScanSearch, Workflow, MailCheck, FileSearch, CheckCircle2, ShieldCheck, Lock, Globe, Server, AlertTriangle, Link2, EyeOff, Zap, ListChecks, Clock, Target, SlidersHorizontal, Info } from 'lucide-react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './lib/firebase';
 import { getUserProfile } from './utils/userProfile';
@@ -12,6 +14,20 @@ import Sidebar from './components/Sidebar';
 const THEME_KEY = 'api-secure-theme';
 const HISTORY_KEY = 'api-secure-history';
 const HISTORY_MAX = 50;
+
+const PAGE_TO_PATH = {
+  'scanner':         '/scanner',
+  'token-generator': '/testcurl',
+  'history':         '/history',
+  'settings':        '/settings',
+};
+const PATH_TO_PAGE = {
+  '/scanner':  'scanner',
+  '/testcurl': 'token-generator',
+  '/history':  'history',
+  '/settings': 'settings',
+  '/':         'scanner',
+};
 
 function useHistory() {
   const [history, setHistory] = useState(() => {
@@ -42,9 +58,9 @@ function useHistory() {
 function useTheme() {
   const [theme, setThemeState] = useState(() => {
     try {
-      return (localStorage.getItem(THEME_KEY) || 'dark');
+      return (localStorage.getItem(THEME_KEY) || 'light');
     } catch {
-      return 'dark';
+      return 'light';
     }
   });
 
@@ -67,7 +83,118 @@ const TESTING_METHODS = [
   { id: 'm_cors', value: 'cors', label: 'CORS Validation' },
   { id: 'm_error', value: 'Improper Error Handling', label: 'Improper Error Handling' },
   { id: 'm_url', value: 'URL Tampering Analysis', label: 'URL Tampering' },
+  { id: 'm_pii', value: 'Sensitive Data Exposure', label: 'Sensitive Data Exposure / PII Clear Text' },
 ];
+
+/* Presentation only — short name, description and icon for each check in
+   TESTING_METHODS. Keyed by the same `value` that is sent to the API, so the
+   payload is unaffected. The long `label` above is still the accessible title. */
+const CHECK_META = {
+  'http header analysis':      { short: 'Security Headers',       desc: 'CSP, HSTS, X-Frame-Options and more',    Icon: ShieldCheck,    tone: 'blue' },
+  'SSL / TLS analysis':        { short: 'SSL / TLS',              desc: 'Certificate, encryption and protocols',  Icon: Lock,           tone: 'green' },
+  'cors':                      { short: 'CORS',                   desc: 'Cross-origin policy validation',         Icon: Globe,          tone: 'violet' },
+  'Server version Disclosure': { short: 'Server Information',     desc: 'Version and service disclosure',         Icon: Server,         tone: 'amber' },
+  'Improper Error Handling':   { short: 'Error Handling',          desc: 'Verbose errors and information leakage', Icon: AlertTriangle,  tone: 'red' },
+  'URL Tampering Analysis':    { short: 'URL Tampering',          desc: 'Parameter and URL manipulation',         Icon: Link2,          tone: 'cyan' },
+  'Sensitive Data Exposure':   { short: 'Sensitive Data Exposure', desc: 'PII and plaintext data exposure',       Icon: EyeOff,         tone: 'slate' },
+};
+
+/* Presentation only — scan profiles are presets that tick the existing
+   checkboxes. They do not alter how a scan runs; the request still sends
+   whatever is selected in `selectedMethods`. */
+const QUICK_SCAN_METHODS = ['http header analysis', 'SSL / TLS analysis', 'Server version Disclosure'];
+
+const SCAN_PROFILES = [
+  { id: 'quick',    label: 'Quick Scan',    hint: 'Essential checks · ~2 min', Icon: Zap },
+  { id: 'standard', label: 'Standard Scan', hint: 'All checks · ~5 min',       Icon: ShieldCheck },
+  { id: 'custom',   label: 'Custom Scan',   hint: 'Choose your own checks',    Icon: SlidersHorizontal },
+];
+
+/* Presentation only — short relative time for the Recent Scans panel. */
+function AnalysisInfoButton({ variant = 'pill' }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const panelId = `analysis-info-panel-${variant}`;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="analysis-info" ref={wrapRef}>
+      {variant === 'icon' ? (
+        <button
+          type="button"
+          className="header-icon-btn"
+          title="Help"
+          aria-label="Help"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <HelpCircle size={16} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          className="analysis-info-btn"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Info size={14} aria-hidden />
+          About analysis
+        </button>
+      )}
+      {open && (
+        <div id={panelId} className="analysis-info-panel" role="dialog" aria-label="About the analysis engine">
+          <div className="analysis-info-head">
+            <strong>Rule-based analysis · no LLM</strong>
+            <button type="button" className="analysis-info-close" aria-label="Close" onClick={() => setOpen(false)}>
+              <X size={14} />
+            </button>
+          </div>
+          <p>
+            A local LLM such as BART can be integrated into this project for AI-based analysis in the future.
+            However, the backend is currently deployed on Render&rsquo;s free tier, which has resource limitations
+            and does not support hosting an LLM model of 3&nbsp;GB or larger.
+          </p>
+          <p>
+            Using external LLM APIs would also introduce additional usage costs. Therefore, the current
+            implementation has been intentionally rebuilt using lightweight, rule-based scripting and basic
+            analysis, without relying on an external or locally hosted LLM.
+          </p>
+          <p>
+            The existing architecture can be further extended in the future to support AI-powered analysis,
+            intelligent vulnerability interpretation, automated recommendations, and more advanced security
+            insights once suitable infrastructure or an appropriate LLM service is available.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatRelativeTime(iso) {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (isNaN(then)) return '';
+  const mins = Math.round((Date.now() - then) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} hr ago`;
+  const days = Math.round(hrs / 24);
+  return days === 1 ? '1 day ago' : `${days} days ago`;
+}
 
 // Map each testing method value → the result field it populates.
 // Used to skip already-tested controls when re-scanning.
@@ -78,6 +205,7 @@ const METHOD_TO_FIELD = {
   'cors':                 'corsReport',
   'Improper Error Handling': 'errorHandlingReport',
   'URL Tampering Analysis':  'urlTamperingReport',
+  'Sensitive Data Exposure':  'sensitiveDataReport',
 };
 
 /**
@@ -95,6 +223,135 @@ function getNewMethods(currentResult, selectedMethods) {
   });
 }
 
+function capturePageCSS() {
+  let css = '';
+  for (const sheet of document.styleSheets) {
+    try { for (const rule of sheet.cssRules) css += rule.cssText + '\n'; } catch (_) {}
+  }
+  return css;
+}
+
+function buildDownloadHTML(innerHtml, title) {
+  const theme = document.documentElement.getAttribute('data-theme') || 'dark';
+  const css = capturePageCSS();
+  return `<!DOCTYPE html>
+<html lang="en" data-theme="${theme}">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>${title}</title>
+<style>
+${css}
+:root{--bg:#0f172a;--bg-card:#1e293b;--bg-input:#334155;--text:#f1f5f9;--text-muted:#94a3b8;--border:#334155;--primary:#6366f1;--primary-light:#818cf8;--danger:#ef4444;--success:#22c55e;--warning:#f59e0b}
+[data-theme="light"]{--bg:#f8fafc;--bg-card:#fff;--bg-input:#f1f5f9;--text:#1e293b;--text-muted:#64748b;--border:#e2e8f0}
+body{margin:0;padding:24px;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+@media print{body{padding:8px}}
+</style>
+</head>
+<body>
+${innerHtml}
+</body>
+</html>`;
+}
+
+function downloadHTMLFile(html, filename) {
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Validate that aiHeaders in a headersReport are consistent with evaluatedHeaders.
+ * If any header's present/absent state disagrees, strip the stale AI fields and
+ * rebuild minimal consistent ones from evaluatedHeaders so the report never lies.
+ */
+function sanitizeHeadersReport(hr) {
+  if (!hr || !hr.evaluatedHeaders) return hr;
+  const evaluated = hr.evaluatedHeaders;
+  const aiHeaders = hr.aiHeaders;
+  if (!aiHeaders || !aiHeaders.length) return hr;
+
+  const aiMap = {};
+  for (const h of aiHeaders) { if (h.name) aiMap[h.name] = h; }
+
+  let stale = false;
+  for (const [name, info] of Object.entries(evaluated)) {
+    const scanPresent = !!info.present;
+    const aiEntry = aiMap[name];
+    if (aiEntry && !!aiEntry.present !== scanPresent) { stale = true; break; }
+  }
+  if (!stale) return hr;
+
+  const HEADER_FIX_MAP = {
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self';",
+    'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+    'X-XSS-Protection': '1; mode=block',
+    'Cross-Origin-Embedder-Policy': 'require-corp',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'X-Permitted-Cross-Domain-Policies': 'none',
+  };
+
+  const rebuilt = [];
+  let crit = 0, warn = 0, ok = 0;
+  for (const [name, info] of Object.entries(evaluated)) {
+    const sev = info.present ? ((info.severity || 'ok').toLowerCase() === 'warning' ? 'warning' : 'ok') : 'critical';
+    if (sev === 'critical') crit++;
+    else if (sev === 'warning') warn++;
+    else ok++;
+    rebuilt.push({
+      name,
+      present: !!info.present,
+      value: info.value || null,
+      severity: sev,
+      whatItDoes: aiMap[name]?.whatItDoes || `Security header: ${name}`,
+      status: info.present ? 'Properly configured.' : 'Not configured — missing from response.',
+      risk: info.present ? 'No immediate risk.' : `Missing ${name} header leaves your site exposed.`,
+      fix: info.present ? 'No action needed.' : `Add: ${HEADER_FIX_MAP[name] || name}`,
+      description: aiMap[name]?.description || `Security header: ${name}`,
+      issue: info.present ? 'Configured' : `Missing ${name} header`,
+      impact: info.present ? 'Low risk' : 'High security risk',
+      recommendation: info.present ? 'Review configuration' : `Add ${name} header`,
+    });
+  }
+  const riskLevel = crit >= 6 ? 'Critical' : crit >= 4 ? 'High' : crit >= 2 ? 'Medium' : crit >= 1 ? 'Low' : 'Good';
+  return {
+    ...hr,
+    aiHeaders: rebuilt,
+    aiSummary: { criticalCount: crit, warningCount: warn, okCount: ok, totalHeaders: rebuilt.length },
+    aiOverallRisk: riskLevel,
+    aiRiskExplanation: `${crit} critical issue${crit !== 1 ? 's' : ''} found — data refreshed from scan results.`,
+    aiExecutiveSummary: hr.aiExecutiveSummary || null,
+    aiTopRecs: (hr.aiTopRecs || []).filter(r => {
+      const entry = evaluated[r.header];
+      return entry && !entry.present;
+    }),
+    aiSource: 'sanitized',
+  };
+}
+
+function sanitizeResult(result) {
+  if (!result) return result;
+  if (result.batch && result.results) {
+    return { ...result, results: result.results.map(r => {
+      if (!r?.headersReport) return r;
+      return { ...r, headersReport: sanitizeHeadersReport(r.headersReport) };
+    })};
+  }
+  if (result.headersReport) {
+    return { ...result, headersReport: sanitizeHeadersReport(result.headersReport) };
+  }
+  return result;
+}
+
 /**
  * Merge a new partial scan result into the existing result.
  * Copies non-null report fields from newData into existingResult.
@@ -103,7 +360,6 @@ function mergeResults(existingResult, newData) {
   if (!existingResult) return newData;
   const reportFields = Object.values(METHOD_TO_FIELD);
   const merged = { ...existingResult };
-  // For batch results, merge per-index
   if (existingResult.batch && newData.batch) {
     merged.results = (existingResult.results || []).map((old, i) => {
       const fresh = newData.results?.[i] || {};
@@ -118,28 +374,10 @@ function mergeResults(existingResult, newData) {
     if (newData.overallSummary) merged.overallSummary = newData.overallSummary;
     if (newData.aiEnabled != null) merged.aiEnabled = newData.aiEnabled;
   }
-  return merged;
+  return sanitizeResult(merged);
 }
 
-function CopyButton({ text }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      className={`copy-btn${copied ? ' copy-btn--done' : ''}`}
-      onClick={() => {
-        navigator.clipboard.writeText(text).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        });
-      }}
-      title="Copy to clipboard"
-    >
-      {copied ? '✓ Copied' : 'Copy'}
-    </button>
-  );
-}
-
-function HeadersReport({ r, onRetryAI, aiPolling }) {
+function HeadersReport({ r }) {
   if (!r) return <div className="report-inner"><div className="section"><div className="section-content" style={{padding:'2rem',color:'var(--text-muted)'}}>No header report data.</div></div></div>;
 
   const hasError = !!r.error;
@@ -181,34 +419,12 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
     <div className="report-inner">
       {/* Report header */}
       <div className="site-info">
-        <div className="site-info-main">
-          <div className="site-url">{d}</div>
-          <div className="scan-time">Security Headers Analysis · {scanned}</div>
-        </div>
-        <div className="site-info-score">
-          <svg className="score-ring" viewBox="0 0 64 64">
-            <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="5"/>
-            <circle cx="32" cy="32" r="26" fill="none" stroke={progressColor} strokeWidth="5"
-              strokeDasharray={`${(score/100)*163.4} 163.4`} strokeLinecap="round"
-              transform="rotate(-90 32 32)" style={{transition:'stroke-dasharray 1s ease'}}/>
-          </svg>
-          <div className="score-ring-label">
-            <div className="score-ring-num" style={{color: progressColor}}>{score}</div>
-            <div className="score-ring-sub">/ 100</div>
-          </div>
-        </div>
+        <div className="site-url">{d}</div>
+        <div className="scan-time">Security Headers Analysis · {scanned}</div>
       </div>
 
       {/* Score metric strip */}
       <div className="summary-grid">
-        <div className="summary-card" style={{borderBottomColor: gradeColor}}>
-          <div className="card-value" style={{color: gradeColor}}>{grade}</div>
-          <div className="card-title">Grade</div>
-        </div>
-        <div className="summary-card" style={{borderBottomColor: progressColor}}>
-          <div className="card-value" style={{color: progressColor}}>{score}<span className="card-value-unit">/100</span></div>
-          <div className="card-title">Security Score</div>
-        </div>
         <div className="summary-card" style={{borderBottomColor:'#dc2626'}}>
           <div className="card-value" style={{color:'#dc2626'}}>{r.criticalCount ?? 0}</div>
           <div className="card-title">Critical Issues</div>
@@ -216,17 +432,6 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
         <div className="summary-card" style={{borderBottomColor:'#d97706'}}>
           <div className="card-value" style={{color:'#d97706'}}>{r.warningCount ?? 0}</div>
           <div className="card-title">Warnings</div>
-        </div>
-      </div>
-
-      {/* Score progress bar */}
-      <div className="report-score-bar-wrap">
-        <div className="report-score-bar-top">
-          <span className="report-score-bar-label">Overall Security Posture</span>
-          <span className="report-score-bar-pct" style={{color: progressColor}}>{score}%</span>
-        </div>
-        <div className="report-score-bar-track">
-          <div className="report-score-bar-fill" style={{width:`${score}%`, background: progressColor}} />
         </div>
       </div>
 
@@ -256,71 +461,33 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
               </table>
             </div>
           </div>
-          {/* ── Security Analysis Section (AI or Fallback) ─────────── */}
+          {/* ── Security Assessment Section ─────────── */}
           {(() => {
-            const hasAI = !!(r.aiExecutiveSummary || r.aiHeaders?.length > 0);
-            const isTemplate = r.aiSource === 'template';
-            const isCache = r.aiSource === 'cache';
-            const isLLM = r.aiSource === 'llm';
             const aiIssues = (r.aiHeaders || []).filter(h => (h.severity||'ok') !== 'ok');
             const aiPassing = (r.aiHeaders || []).filter(h => (h.severity||'ok') === 'ok');
-
-            // Ground truth from the scanner — always correct
-            const scanCritical = Object.values(r.evaluatedHeaders || {}).filter(h => (h.severity||'').toLowerCase() === 'critical').length;
-            const scanWarning  = Object.values(r.evaluatedHeaders || {}).filter(h => (h.severity||'').toLowerCase() === 'warning').length;
-            const scanOk       = Object.values(r.evaluatedHeaders || {}).filter(h => (h.severity||'').toLowerCase() === 'ok').length;
-            const scanTotal    = Object.keys(r.evaluatedHeaders || {}).length;
-
-            // AI counts — only use when they agree with scanner ground truth
-            const aiCritFromData = hasAI ? (r.aiSummary?.criticalCount ?? aiIssues.filter(h => h.severity === 'critical').length) : null;
-            const aiWarnFromData = hasAI ? (r.aiSummary?.warningCount  ?? aiIssues.filter(h => h.severity === 'warning').length)  : null;
-            const aiOkFromData   = hasAI ? (r.aiSummary?.okCount       ?? aiPassing.length) : null;
-            // If AI data total differs significantly from scan total, AI data is stale — fall back to scan counts
-            const aiTotal = (aiCritFromData ?? 0) + (aiWarnFromData ?? 0) + (aiOkFromData ?? 0);
-            const aiCountsValid = !hasAI || aiTotal === 0 || Math.abs(aiTotal - scanTotal) <= 2;
-
-            const critCount = aiCountsValid && aiCritFromData !== null ? aiCritFromData : scanCritical;
-            const warnCount = aiCountsValid && aiWarnFromData !== null ? aiWarnFromData : scanWarning;
-            const okCount   = aiCountsValid && aiOkFromData   !== null ? aiOkFromData   : scanOk;
-            const totalCount = scanTotal || (critCount + warnCount + okCount);
-
-            const riskLevel = hasAI && aiCountsValid ? (r.aiOverallRisk || 'Unknown').toLowerCase() : (critCount >= 7 ? 'critical' : critCount >= 4 ? 'high' : critCount >= 2 ? 'medium' : critCount >= 1 ? 'low' : 'good');
+            const critCount = r.aiSummary?.criticalCount ?? aiIssues.filter(h => h.severity === 'critical').length;
+            const warnCount = r.aiSummary?.warningCount ?? aiIssues.filter(h => h.severity === 'warning').length;
+            const okCount = r.aiSummary?.okCount ?? aiPassing.length;
+            const riskLevel = (r.aiOverallRisk || 'Unknown').toLowerCase();
             const riskLabel = {'critical':'Not Protected','high':'High Risk','medium':'Needs Work','low':'Mostly Secure','good':'Well Protected'}[riskLevel] || r.aiOverallRisk || 'Unknown';
-
-            // Badge and title depend on source
-            const badge = isLLM ? 'AI-Powered Security Audit' : isCache ? 'AI-Powered (Cached)' : aiPolling ? 'Instant Analysis · AI Upgrading…' : 'Instant Security Analysis';
-            const reportTitle = (isLLM || isCache) ? 'Security Assessment Report' : 'Findings & Recommendations';
 
             return (
             <div className="ai-report">
               {/* ── Report Header ── */}
               <div className="ai-report-header">
                 <div className="ai-report-header-left">
-                  <div className="ai-report-badge">{badge}</div>
-                  <div className="ai-report-title">{reportTitle}</div>
+                  <div className="ai-report-badge">Security Audit</div>
+                  <div className="ai-report-title">Security Assessment Report</div>
                 </div>
                 <div className="ai-report-header-right">
                   <div className={`ai-risk-indicator ai-risk-${riskLevel}`}>
                     <div className="ai-risk-level">{riskLabel}</div>
                     <div className="ai-risk-sublabel">
-                      {(hasAI && aiCountsValid)
-                        ? (r.aiRiskExplanation || `Overall risk level: ${r.aiOverallRisk || 'Unknown'}`)
-                        : `${critCount} critical issue${critCount !== 1 ? 's' : ''} found`}
+                      {r.aiRiskExplanation || `${critCount} critical issue${critCount !== 1 ? 's' : ''} found`}
                     </div>
                   </div>
                 </div>
               </div>
-
-              {/* ── AI Enhancing Banner (shown while LLM runs in background) ── */}
-              {aiPolling && isTemplate && (
-                <div className="ai-enhancing-banner">
-                  <span className="ai-enhancing-spinner" />
-                  <div className="ai-enhancing-text">
-                    <strong>AI is analysing your headers…</strong>
-                    <span>You&apos;re viewing instant results. The report will automatically upgrade with AI-powered explanations and plain-English advice in a moment.</span>
-                  </div>
-                </div>
-              )}
 
               {/* ── Stats Bar ── */}
               <div className="ai-stats-bar">
@@ -337,65 +504,75 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
                   <div className="ai-stat-label">Well Protected</div>
                 </div>
                 <div className="ai-stat ai-stat-total">
-                  <div className="ai-stat-num">{totalCount}</div>
+                  <div className="ai-stat-num">{(r.aiHeaders || []).length}</div>
                   <div className="ai-stat-label">Total Checked</div>
                 </div>
               </div>
 
-              {/* ── AI Executive Summary ── */}
-              {hasAI && r.aiExecutiveSummary && (
+              {/* ── Executive Summary ── */}
+              {r.aiExecutiveSummary && (
                 <div className="ai-exec-summary">
                   <div className="ai-section-title"><span className="ai-section-icon">📋</span> Executive Summary</div>
                   <p className="ai-exec-summary-text">{r.aiExecutiveSummary}</p>
                 </div>
               )}
 
-              {/* ── AI: Detailed Issue Cards ── */}
-              {hasAI && aiIssues.length > 0 && (
+              {/* ── Detailed Issue Cards ── */}
+              {aiIssues.length > 0 && (
                 <div className="ai-issues-section">
-                  <div className="ai-section-title"><span className="ai-section-icon">🛡️</span> Security Issues Found <span className="ai-section-count">{aiIssues.length}</span></div>
+                  <div className="ai-section-title"><span className="ai-section-icon">🛡️</span> Security Issues Found ({aiIssues.length})</div>
                   <div className="ai-issues-list">
                     {aiIssues.map((h, i) => {
                       const sev = (h.severity||'ok').toLowerCase();
                       const sevLabel = sev === 'critical' ? 'Not Protected' : 'Needs Attention';
-                      const sevIcon = sev === 'critical' ? '🔴' : '🟡';
                       return (
                       <div key={i} className={`ai-issue-card ai-sev-${sev}`}>
-                        {/* Card header */}
                         <div className="ai-issue-header">
-                          <div className="ai-issue-header-left">
-                            <span className="ai-issue-sev-icon">{sevIcon}</span>
-                            <div className="ai-issue-name">{h.name}</div>
-                          </div>
+                          <div className="ai-issue-name">{h.name}</div>
                           <span className={`ai-issue-badge ai-badge-${sev}`}>{sevLabel}</span>
                         </div>
-                        {/* Current value pill */}
                         {h.value && h.value !== 'null' && h.value !== 'Not set' && (
                           <div className="ai-issue-value-row">
-                            <span className="ai-issue-value-label">Current value</span>
-                            <code className="ai-issue-value-code">{String(h.value).slice(0,130)}{String(h.value).length > 130 ? '…' : ''}</code>
+                            <span className="ai-issue-value-label">Value</span>
+                            <code className="ai-issue-value-code">{String(h.value).slice(0,120)}{String(h.value).length > 120 ? '…' : ''}</code>
                           </div>
                         )}
-                        {/* Info grid */}
                         <div className="ai-issue-body">
-                          {(h.whatItDoes || h.description) && (
-                            <div className="ai-issue-field">
-                              <div className="ai-issue-field-label">🛡 What this protects</div>
-                              <div className="ai-issue-field-text">{h.whatItDoes || h.description}</div>
-                            </div>
+                          <div className="ai-issue-field">
+                            <div className="ai-issue-field-label">What this protects</div>
+                            <div className="ai-issue-field-text">{h.whatItDoes || h.description || ''}</div>
+                          </div>
+                          {sev !== 'critical' && (
+                          <div className="ai-issue-field">
+                            <div className="ai-issue-field-label">Current status</div>
+                            <div className="ai-issue-field-text">{h.status || h.issue || ''}</div>
+                          </div>
                           )}
-                          {(h.risk || h.impact) && (
-                            <div className="ai-issue-field ai-issue-field--risk">
-                              <div className="ai-issue-field-label">⚠ What could go wrong</div>
-                              <div className="ai-issue-field-text">{h.risk || h.impact}</div>
+                          <div className="ai-issue-field ai-issue-field--risk">
+                            <div className="ai-issue-field-label">What could go wrong</div>
+                            <div className="ai-issue-field-text">{h.risk || h.impact || ''}</div>
+                          </div>
+                          <div className="ai-issue-field ai-issue-field--fix">
+                            <div className="ai-issue-field-label">How to fix</div>
+                            <div className="ai-issue-field-text">{h.fix || h.recommendation || ''}</div>
+                          </div>
+                          {(() => {
+                            const important = (h.findings || []).filter(f => f.severity === 'high' || f.severity === 'medium');
+                            if (!important.length) return null;
+                            return (
+                            <div className="ai-issue-field ai-issue-field--findings">
+                              <div className="ai-issue-field-label">Detailed findings ({important.length})</div>
+                              <ul className="ai-findings-list">
+                                {important.map((f, fi) => (
+                                  <li key={fi} className={`ai-finding-item ai-finding-${f.severity}`}>
+                                    <span className="ai-finding-sev">{f.severity === 'high' ? '🔴' : '🟠'}</span>
+                                    <strong>{f.title}</strong> — {f.detail}
+                                  </li>
+                                ))}
+                              </ul>
                             </div>
-                          )}
-                          {(h.fix || h.recommendation) && (
-                            <div className="ai-issue-field ai-issue-field--fix">
-                              <div className="ai-issue-field-label">✅ How to fix</div>
-                              <div className="ai-issue-field-text">{h.fix || h.recommendation}</div>
-                            </div>
-                          )}
+                            );
+                          })()}
                         </div>
                       </div>
                       );
@@ -404,93 +581,74 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
                 </div>
               )}
 
-              {/* ── Fallback: Basic scanner findings when AI is not available ── */}
-              {!hasAI && (
-                <>
-                  {r.vulnerabilities?.length > 0 && (
-                    <div className="ai-issues-section">
-                      <div className="ai-section-title"><span className="ai-section-icon">⛔</span> Critical Issues ({r.vulnerabilities.length})</div>
+              {/* ── Extra Findings (Cookies, Server, Info Leakage, Deprecated, Duplicates) ── */}
+              {r.extraFindings && r.extraFindings.length > 0 && (() => {
+                const cookieFindings = r.extraFindings.filter(f => (f.id || '').startsWith('cookie-'));
+                const securityFindings = r.extraFindings.filter(f => !(f.id || '').startsWith('cookie-') && (f.severity === 'high' || f.severity === 'medium'));
+                const infoFindings = r.extraFindings.filter(f => !(f.id || '').startsWith('cookie-') && f.severity !== 'high' && f.severity !== 'medium');
+                const sevBadge = (sev) => sev === 'high' ? 'critical' : sev === 'medium' ? 'warning' : 'ok';
+                const sevLabel = (sev) => sev === 'high' ? 'High' : sev === 'medium' ? 'Warning' : 'Info';
+                const sevIcon = (sev) => sev === 'high' ? '🔴' : sev === 'medium' ? '🟠' : sev === 'low' ? '🟡' : 'ℹ️';
+                return (
+                <div className="ai-issues-section ai-extra-findings-section">
+                  <div className="ai-section-title"><span className="ai-section-icon">📋</span> Additional Security Observations ({r.extraFindings.length})</div>
+
+                  {cookieFindings.length > 0 && (
+                    <div className="ai-extra-group">
+                      <div className="ai-extra-group-title">🍪 Cookie Security ({cookieFindings.length} issue{cookieFindings.length !== 1 ? 's' : ''})</div>
                       <div className="ai-issues-list">
-                        {r.vulnerabilities.map((v, i) => {
-                          const parts = String(v).split(':');
-                          const headerName = parts.length > 1 ? parts[0].trim() : '';
-                          const desc = parts.length > 1 ? parts.slice(1).join(':').trim() : String(v);
-                          return (
-                          <div key={i} className="ai-issue-card ai-sev-critical">
+                        {cookieFindings.map((f, i) => (
+                          <div key={`c${i}`} className={`ai-issue-card ai-sev-${sevBadge(f.severity)}`}>
                             <div className="ai-issue-header">
-                              <div className="ai-issue-name">{headerName || 'Security Issue'}</div>
-                              <span className="ai-issue-badge ai-badge-critical">Not Protected</span>
+                              <div className="ai-issue-name">{f.title}</div>
+                              <span className={`ai-issue-badge ai-badge-${sevBadge(f.severity)}`}>{sevLabel(f.severity)}</span>
                             </div>
-                            <div className="ai-issue-row">
-                              <div className="ai-issue-col">
-                                <div className="ai-issue-text">{desc}</div>
-                              </div>
-                            </div>
-                          </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {r.warnings?.length > 0 && (
-                    <div className="ai-issues-section">
-                      <div className="ai-section-title"><span className="ai-section-icon">⚠️</span> Warnings ({r.warnings.length})</div>
-                      <div className="ai-issues-list">
-                        {r.warnings.map((w, i) => (
-                          <div key={i} className="ai-issue-card ai-sev-warning">
-                            <div className="ai-issue-header">
-                              <div className="ai-issue-name">{String(w).split(':')[0]?.trim() || 'Warning'}</div>
-                              <span className="ai-issue-badge ai-badge-warning">Needs Attention</span>
-                            </div>
-                            <div className="ai-issue-row">
-                              <div className="ai-issue-col">
-                                <div className="ai-issue-text">{String(w).split(':').slice(1).join(':').trim() || String(w)}</div>
-                              </div>
-                            </div>
+                            <div className="ai-issue-body"><div className="ai-issue-field"><div className="ai-issue-field-text">{f.detail}</div></div></div>
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
-                  {r.recommendations?.length > 0 && (
-                    <div className="ai-action-section">
-                      <div className="ai-section-title"><span className="ai-section-icon">🛠️</span> Recommendations</div>
-                      <div className="ai-action-list">
-                        {r.recommendations.map((rec, i) => {
-                          const parts = String(rec).split(':');
-                          const headerName = parts.length > 1 ? parts[0].trim() : '';
-                          const action = parts.length > 1 ? parts.slice(1).join(':').trim() : String(rec);
-                          return (
-                          <div key={i} className="ai-action-item">
-                            <div className="ai-action-num">{i + 1}</div>
-                            <div className="ai-action-body">
-                              {headerName && <div className="ai-action-header">{headerName}</div>}
-                              <div className="ai-action-desc">{action}</div>
-                            </div>
-                          </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {/* AI retry banner */}
-                  {(r.aiError || r.aiHeaderNotes?.startsWith('Security Analysis Summary')) && (
-                    <div className="ai-retry-banner">
-                      <span className="ai-retry-icon">🤖</span>
-                      <div className="ai-retry-text">
-                        <strong>Want deeper analysis?</strong>
-                        <span>{r.aiError || 'Click Retry to get AI-powered insights with plain-English explanations and fix instructions.'}</span>
-                      </div>
-                      {onRetryAI && (
-                        <button className="ai-retry-btn" onClick={onRetryAI}>⟳ Retry AI Analysis</button>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
 
-              {/* ── AI: Protected Headers ── */}
-              {hasAI && aiPassing.length > 0 && (
+                  {securityFindings.length > 0 && (
+                    <div className="ai-extra-group">
+                      <div className="ai-extra-group-title">⚠️ Security Warnings ({securityFindings.length})</div>
+                      <div className="ai-issues-list">
+                        {securityFindings.map((f, i) => (
+                          <div key={`s${i}`} className={`ai-issue-card ai-sev-${sevBadge(f.severity)}`}>
+                            <div className="ai-issue-header">
+                              <div className="ai-issue-name">{f.title}</div>
+                              <span className={`ai-issue-badge ai-badge-${sevBadge(f.severity)}`}>{sevLabel(f.severity)}</span>
+                            </div>
+                            <div className="ai-issue-body"><div className="ai-issue-field"><div className="ai-issue-field-text">{f.detail}</div></div></div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {infoFindings.length > 0 && (
+                    <div className="ai-extra-group">
+                      <div className="ai-extra-group-title">ℹ️ Informational ({infoFindings.length})</div>
+                      <div className="ai-issues-list">
+                        {infoFindings.map((f, i) => (
+                          <div key={`i${i}`} className={`ai-issue-card ai-sev-ok`}>
+                            <div className="ai-issue-header">
+                              <div className="ai-issue-name">{sevIcon(f.severity)} {f.title}</div>
+                              <span className="ai-issue-badge ai-badge-ok">{sevLabel(f.severity)}</span>
+                            </div>
+                            <div className="ai-issue-body"><div className="ai-issue-field"><div className="ai-issue-field-text">{f.detail}</div></div></div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                );
+              })()}
+
+              {/* ── Protected Headers ── */}
+              {aiPassing.length > 0 && (
                 <div className="ai-passing-section">
                   <div className="ai-section-title"><span className="ai-section-icon">✅</span> Protected <span className="ai-section-count ai-section-count--ok">{aiPassing.length} headers properly configured</span></div>
                   <div className="ai-passing-grid">
@@ -500,15 +658,25 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
                           <span className="ai-passing-check">✓</span>
                           <span className="ai-passing-name">{h.name}</span>
                         </div>
-                        <div className="ai-passing-desc">{h.whatItDoes || h.description || 'Properly configured'}</div>
+                        <div className="ai-passing-desc">{h.whatItDoes || h.status || h.description || 'Properly configured'}</div>
+                        {h.findings && h.findings.length > 0 && (
+                          <div className="ai-passing-notes">
+                            {h.findings.map((f, fi) => (
+                              <div key={fi} className="ai-passing-note">
+                                <span className="ai-passing-note-icon">{f.severity === 'low' ? '💡' : 'ℹ️'}</span>
+                                <span>{f.title}{f.detail ? ` — ${f.detail}` : ''}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* ── AI: Action Plan ── */}
-              {hasAI && r.aiTopRecs?.length > 0 && (
+              {/* ── Action Plan ── */}
+              {r.aiTopRecs?.length > 0 && (
                 <div className="ai-action-section">
                   <div className="ai-section-title"><span className="ai-section-icon">🛠️</span> Recommended Action Plan</div>
                   <p className="ai-action-intro">Fix these items in order of priority to significantly improve your security posture:</p>
@@ -519,16 +687,11 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
                         <div className="ai-action-body">
                           <div className="ai-action-header">{rec.header}</div>
                           <div className="ai-action-desc">{rec.action}</div>
-                          {rec.why && (
-                            <div className="ai-action-why">
-                              <span className="ai-action-why-icon">💡</span> {rec.why}
-                            </div>
-                          )}
+                          {rec.why && <div className="ai-action-why"><span className="ai-action-why-icon">💡</span> <strong>Why:</strong> {rec.why}</div>}
                           {rec.exampleValue && (
                             <div className="ai-action-code-block">
                               <div className="ai-action-code-top">
-                                <span className="ai-action-code-label">Add to your server config</span>
-                                <CopyButton text={rec.exampleValue} />
+                                <div className="ai-action-code-label">Add this to your server configuration:</div>
                               </div>
                               <code className="ai-action-code">{rec.exampleValue}</code>
                             </div>
@@ -540,43 +703,8 @@ function HeadersReport({ r, onRetryAI, aiPolling }) {
                 </div>
               )}
 
-              {/* ── Retry / Upgrade strip ── */}
-              {isTemplate && !aiPolling && onRetryAI && (
-                <div className="ai-upgrade-strip">
-                  <span className="ai-upgrade-icon">🤖</span>
-                  <div className="ai-upgrade-text">
-                    <strong>Upgrade to AI Analysis</strong>
-                    <span>Get plain-English explanations, real business-risk context, and copy-paste fix values — powered by AI.</span>
-                  </div>
-                  <button className="ai-upgrade-btn" onClick={onRetryAI}>
-                    ⟳ Run AI Analysis
-                  </button>
-                </div>
-              )}
-              {isTemplate && aiPolling && (
-                <div className="ai-upgrade-strip ai-upgrade-strip--running">
-                  <span className="ai-enhancing-spinner" style={{flexShrink:0}} />
-                  <div className="ai-upgrade-text">
-                    <strong>AI analysis running…</strong>
-                    <span>This report will automatically upgrade with deeper AI insights when complete.</span>
-                  </div>
-                </div>
-              )}
-              {(isLLM || isCache) && onRetryAI && (
-                <div className="ai-rerun-strip">
-                  <span style={{fontSize:'0.8rem',color:'var(--text-muted)'}}>
-                    {isCache ? '⚡ Served from cache (24h)' : '✓ AI-powered analysis'}
-                  </span>
-                  <button className="ai-rerun-btn" onClick={onRetryAI} title="Force a fresh AI analysis">
-                    ↻ Re-run AI
-                  </button>
-                </div>
-              )}
-
               <div className="ai-report-footer">
-                {(isLLM || isCache)
-                  ? 'Analysis powered by AI — review recommendations with your development team before implementing changes.'
-                  : 'Showing instant analysis. Run AI Analysis above for deeper, plain-English insights.'}
+                Review recommendations with your development team before implementing changes.
               </div>
             </div>
             );
@@ -746,13 +874,12 @@ function CorsReport({ r }) {
   );
 }
 
-// Severity colours and labels used throughout the Server report
 const SVD_SEVERITY_META = {
-  Critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)', icon: '🔴', plain: 'Very High Risk' },
-  High:     { color: '#f97316', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.3)', icon: '🟠', plain: 'High Risk' },
-  Medium:   { color: '#eab308', bg: 'rgba(234,179,8,0.1)',  border: 'rgba(234,179,8,0.3)',  icon: '🟡', plain: 'Medium Risk' },
-  Low:      { color: '#22c55e', bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.3)', icon: '🟢', plain: 'Low Risk' },
-  Informational: { color: '#6b7280', bg: 'rgba(107,114,128,0.08)', border: 'rgba(107,114,128,0.2)', icon: '🔵', plain: 'Informational' },
+  Critical: { color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)', label: 'Critical' },
+  High:     { color: '#f97316', bg: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.3)', label: 'High' },
+  Medium:   { color: '#eab308', bg: 'rgba(234,179,8,0.1)',  border: 'rgba(234,179,8,0.3)',  label: 'Medium' },
+  Low:      { color: '#22c55e', bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.3)', label: 'Low' },
+  Informational: { color: '#6b7280', bg: 'rgba(107,114,128,0.08)', border: 'rgba(107,114,128,0.2)', label: 'Info' },
 };
 
 // Plain-English explanation for each disclosure header type
@@ -777,35 +904,22 @@ function SvdFindingCard({ disc }) {
     <div className="svd-finding-card" style={{ borderLeftColor: meta.color }}>
       <div className="svd-finding-top">
         <div className="svd-finding-header-name">
-          <span className="svd-finding-icon">{meta.icon}</span>
+          <span className="svd-severity-dot" style={{ background: meta.color }}></span>
           <strong>{disc.header}</strong>
-          <span className="svd-risk-pill" style={{ background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }}>
-            {meta.plain}
-          </span>
+          <span className="svd-risk-pill" style={{ background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }}>{meta.label}</span>
         </div>
         <div className="svd-finding-value-row">
-          <span className="svd-value-label">Value sent to the browser:</span>
+          <span className="svd-value-label">Value:</span>
           <code className="svd-value-code">{disc.value || '—'}</code>
         </div>
       </div>
-      <div className="svd-finding-explain">
-        <div className="svd-explain-what">
-          <span className="svd-explain-label">What is this?</span>
-          <span className="svd-explain-text">{plainMeaning}</span>
-        </div>
-        {disc.evidence && (
-          <div className="svd-explain-evidence">
-            <span className="svd-explain-label">What the scanner found:</span>
-            <span className="svd-explain-text">{disc.evidence}</span>
-          </div>
-        )}
-        {isHighRisk && (
-          <div className="svd-explain-risk-note">
-            <span className="svd-risk-note-icon">⚠️</span>
-            <span>An attacker can look up known security flaws (CVEs) for this exact version and target your server directly.</span>
-          </div>
-        )}
-      </div>
+      <table className="svd-finding-detail-table">
+        <tbody>
+          <tr><td className="svd-detail-label">Description</td><td>{plainMeaning}</td></tr>
+          {disc.evidence && <tr><td className="svd-detail-label">Evidence</td><td>{disc.evidence}</td></tr>}
+          {isHighRisk && <tr className="svd-detail-risk"><td className="svd-detail-label">Risk</td><td>An attacker can look up known security flaws (CVEs) for this exact version and target your server directly.</td></tr>}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -813,17 +927,14 @@ function SvdFindingCard({ disc }) {
 function ServerReport({ r }) {
   const d = r.targetDomain || r.domain || 'Unknown';
   const risk = r.riskLevel || 'Unknown';
-  const riskMeta = SVD_SEVERITY_META[risk] || { color: '#6b7280', bg: 'rgba(107,114,128,0.08)', border: 'rgba(107,114,128,0.2)', icon: '🔵', plain: 'Unknown' };
+  const riskMeta = SVD_SEVERITY_META[risk] || { color: '#6b7280', bg: 'rgba(107,114,128,0.08)', border: 'rgba(107,114,128,0.2)', label: 'Unknown' };
   const disclosures = r.disclosures || [];
   const recs = Array.isArray(r.recommendations) ? r.recommendations : (r.recommendation ? [r.recommendation] : []);
   const configExamples = r.configurationExamples && typeof r.configurationExamples === 'object' ? r.configurationExamples : {};
   const htmlDisclosures = Array.isArray(r.htmlDisclosures) ? r.htmlDisclosures : [];
   const counts = r.summaryCounts || {};
-  const scannedOn = r.scannedAt ? (() => {
-    try { return new Date(r.scannedAt).toLocaleString(); } catch (_) { return r.scannedAt; }
-  })() : '';
+  const scannedOn = r.scannedAt ? (() => { try { return new Date(r.scannedAt).toLocaleString(); } catch (_) { return r.scannedAt; } })() : '';
 
-  const hasVersionDisclosure = (counts.headersWithVersion || 0) > 0;
   const criticalOrHigh = disclosures.filter(d => d.severity === 'Critical' || d.severity === 'High');
   const medium = disclosures.filter(d => d.severity === 'Medium');
   const lowOrInfo = disclosures.filter(d => d.severity === 'Low' || d.severity === 'Informational');
@@ -832,96 +943,59 @@ function ServerReport({ r }) {
   return (
     <div className="report-inner server-disclosure-report">
 
-      {/* ── Header banner ── */}
+      {/* ── Header ── */}
       <div className="site-info">
         <div className="site-url">{d}</div>
         <div className="scan-time">Server Version Disclosure Analysis{scannedOn ? ` · Scanned: ${scannedOn}` : ''}</div>
       </div>
 
-      {/* ── Plain-English explainer ── */}
-      <div className="svd-explainer-box">
-        <div className="svd-explainer-title">🧠 What is Server Version Disclosure?</div>
-        <p className="svd-explainer-body">
-          Every time your server responds to a request, it can attach small labels (called <strong>HTTP headers</strong>) that
-          describe itself — like a name tag. Some of these labels accidentally reveal <em>exactly</em> what software
-          your server runs and which version it is.
-        </p>
-        <p className="svd-explainer-body">
-          <strong>Real-world analogy:</strong> Imagine a bank teller wearing a badge that says
-          <em> "Vault Lock Model XR-200, manufactured 2018"</em>. A thief now knows the exact lock model and can
-          look up its known weaknesses online. Server version disclosure works exactly like that — attackers
-          use the version number to search for known security holes (called <strong>CVEs</strong>) and exploit them.
-        </p>
-        <div className="svd-explainer-steps">
-          <div className="svd-step"><span className="svd-step-num">1</span><span>Your server sends a response with a <code>Server: Apache/2.4.51</code> header</span></div>
-          <div className="svd-step"><span className="svd-step-num">2</span><span>An attacker sees this and searches <em>"Apache 2.4.51 vulnerability"</em></span></div>
-          <div className="svd-step"><span className="svd-step-num">3</span><span>They find a known exploit and launch a targeted attack on your server</span></div>
-        </div>
-      </div>
-
       {r.error && (
-        <div className="svd-status-card" style={{ borderColor: 'var(--danger)', background: 'rgba(239,68,68,0.05)' }}>
-          <span style={{ color: 'var(--danger)', fontWeight: 700 }}>⚠ Scan Error:</span> {r.error}
-        </div>
+        <div className="svd-error-bar"><span className="svd-error-icon">!</span> {r.error}</div>
       )}
 
-      {/* ── Overall risk status card ── */}
+      {/* ── Risk Banner ── */}
       {!r.error && (
-        <div className="svd-status-card" style={{ borderColor: riskMeta.color, background: riskMeta.bg }}>
-          <div className="svd-status-left">
-            <span className="svd-status-icon">{riskMeta.icon}</span>
-            <div>
-              <div className="svd-status-title" style={{ color: riskMeta.color }}>
-                {nothingFound ? 'No Disclosures Found' : `Overall Risk: ${risk}`}
-              </div>
-              <div className="svd-status-subtitle">
-                {nothingFound
-                  ? 'Great — this server does not leak version or technology information in its headers.'
-                  : `${disclosures.length} header${disclosures.length !== 1 ? 's' : ''} disclosing server information${criticalOrHigh.length > 0 ? ` · ${criticalOrHigh.length} Critical/High risk` : ''}`}
-              </div>
+        <div className="svd-risk-banner" style={{ borderLeft: `4px solid ${riskMeta.color}`, background: riskMeta.bg }}>
+          <div className="svd-risk-badge" style={{ background: riskMeta.color }}>{risk.charAt(0)}</div>
+          <div className="svd-risk-text">
+            <div className="svd-risk-title">{nothingFound ? 'No Disclosures Found' : `Overall Risk: ${risk}`}</div>
+            <div className="svd-risk-subtitle">
+              {nothingFound
+                ? 'This server does not leak version or technology information in its response headers.'
+                : `${disclosures.length} header${disclosures.length !== 1 ? 's' : ''} disclosing server information${criticalOrHigh.length > 0 ? ` — ${criticalOrHigh.length} critical/high risk` : ''}`}
             </div>
           </div>
-          <div className="svd-status-right">
-            {counts.totalHeaders != null && <div className="svd-stat"><span className="svd-stat-num">{counts.totalHeaders}</span><span className="svd-stat-lbl">Headers found</span></div>}
-            {counts.headersWithVersion != null && <div className="svd-stat"><span className="svd-stat-num" style={{ color: '#ef4444' }}>{counts.headersWithVersion}</span><span className="svd-stat-lbl">With version</span></div>}
-            {r.stack && <div className="svd-stat"><span className="svd-stat-num svd-stat-stack">{r.stack}</span><span className="svd-stat-lbl">Tech stack</span></div>}
+          <div className="svd-risk-stats">
+            {counts.totalHeaders != null && <div className="svd-rstat"><span className="svd-rstat-num">{counts.totalHeaders}</span><span className="svd-rstat-lbl">Headers</span></div>}
+            {counts.headersWithVersion != null && <div className="svd-rstat"><span className="svd-rstat-num" style={{ color: counts.headersWithVersion > 0 ? '#ef4444' : '#22c55e' }}>{counts.headersWithVersion}</span><span className="svd-rstat-lbl">With version</span></div>}
+            {r.stack && <div className="svd-rstat"><span className="svd-rstat-stack">{r.stack}</span><span className="svd-rstat-lbl">Stack</span></div>}
           </div>
         </div>
       )}
 
-      {/* ── What we found ── */}
+      {/* ── Findings ── */}
       {disclosures.length > 0 && (
         <div className="section">
-          <div className="section-header">🔎 What Was Found on {d}</div>
+          <div className="section-header">Disclosure Findings ({disclosures.length})</div>
           <div className="section-content svd-findings-intro">
-            <p>
-              The scanner checked the response headers returned by <strong>{d}</strong> and found the following
-              disclosures. Each card below explains what the header reveals and why it matters.
-            </p>
+            <p>The following response headers expose server software or technology stack information to any client.</p>
           </div>
-
           {criticalOrHigh.length > 0 && (
             <div className="section-content">
-              <div className="svd-group-label svd-group-danger">🔴 High Priority — Fix These First</div>
-              <div className="svd-findings-list">
-                {criticalOrHigh.map((disc, i) => <SvdFindingCard key={i} disc={disc} />)}
-              </div>
+              <div className="svd-group-label svd-group-danger"><span className="svd-group-dot" style={{background:'#ef4444'}}></span> Critical / High</div>
+              <div className="svd-findings-list">{criticalOrHigh.map((disc, i) => <SvdFindingCard key={i} disc={disc} />)}</div>
             </div>
           )}
           {medium.length > 0 && (
             <div className="section-content">
-              <div className="svd-group-label svd-group-medium">🟡 Medium Priority</div>
-              <div className="svd-findings-list">
-                {medium.map((disc, i) => <SvdFindingCard key={i} disc={disc} />)}
-              </div>
+              <div className="svd-group-label svd-group-medium"><span className="svd-group-dot" style={{background:'#eab308'}}></span> Medium</div>
+              <div className="svd-findings-list">{medium.map((disc, i) => <SvdFindingCard key={i} disc={disc} />)}</div>
             </div>
           )}
           {lowOrInfo.length > 0 && (
             <div className="section-content">
-              <div className="svd-group-label svd-group-low">🟢 Low / Informational</div>
-              <div className="svd-findings-list">
-                {lowOrInfo.map((disc, i) => <SvdFindingCard key={i} disc={disc} />)}
-              </div>
+              <div className="svd-group-label svd-group-low"><span className="svd-group-dot" style={{background:'#22c55e'}}></span> Low / Informational</div>
+              <div className="svd-findings-list">{lowOrInfo.map((disc, i) => <SvdFindingCard key={i} disc={disc} />)}</div>
             </div>
           )}
         </div>
@@ -930,11 +1004,10 @@ function ServerReport({ r }) {
       {/* ── HTML body disclosures ── */}
       {htmlDisclosures.length > 0 && (
         <div className="section">
-          <div className="section-header">📄 Disclosures in the Page Source</div>
+          <div className="section-header">Page Source Disclosures</div>
           <div className="section-content">
-            <p style={{ marginBottom: '0.75rem' }}>
-              In addition to headers, version or technology information was also found <strong>inside the HTML page source</strong> itself.
-              This can happen when a CMS like WordPress embeds its version in page metadata.
+            <p style={{ marginBottom: '0.75rem', fontSize: '0.88rem', color: 'var(--text-muted)' }}>
+              Version or technology information found in the HTML page source (e.g. CMS version in metadata).
             </p>
             <div className="svd-findings-list">
               {htmlDisclosures.map((h, i) => {
@@ -943,17 +1016,14 @@ function ServerReport({ r }) {
                   <div key={i} className="svd-finding-card" style={{ borderLeftColor: meta.color }}>
                     <div className="svd-finding-top">
                       <div className="svd-finding-header-name">
-                        <span className="svd-finding-icon">{meta.icon}</span>
+                        <span className="svd-severity-dot" style={{ background: meta.color }}></span>
                         <strong>{h.type}</strong>
-                        <span className="svd-risk-pill" style={{ background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }}>{meta.plain}</span>
+                        <span className="svd-risk-pill" style={{ background: meta.bg, color: meta.color, border: `1px solid ${meta.border}` }}>{meta.label}</span>
                       </div>
                     </div>
-                    <div className="svd-finding-explain">
-                      <div className="svd-explain-what">
-                        <span className="svd-explain-label">What was found:</span>
-                        <span className="svd-explain-text">{h.description}</span>
-                      </div>
-                    </div>
+                    <table className="svd-finding-detail-table"><tbody>
+                      <tr><td className="svd-detail-label">Details</td><td>{h.description}</td></tr>
+                    </tbody></table>
                   </div>
                 );
               })}
@@ -962,56 +1032,22 @@ function ServerReport({ r }) {
         </div>
       )}
 
-      {/* ── Why this matters ── */}
-      {!nothingFound && (
+      {/* ── Impact Assessment ── */}
+      {!nothingFound && r.attackScenario && (
         <div className="section">
-          <div className="section-header">🎯 Why This Is a Problem</div>
+          <div className="section-header">Impact Assessment</div>
           <div className="section-content">
-            <div className="svd-impact-grid">
-              <div className="svd-impact-card">
-                <div className="svd-impact-icon">🔍</div>
-                <div className="svd-impact-title">Reconnaissance Value</div>
-                <div className="svd-impact-body">
-                  {hasVersionDisclosure
-                    ? 'Attackers use automated scanners to fingerprint servers. A disclosed version number directly maps to known CVEs, making your server an easy, targeted mark.'
-                    : 'Exposing the server name (without a version) confirms the technology in use. Attackers can narrow their approach, though they cannot directly correlate with a specific CVE without a version number.'}
-                </div>
-              </div>
-              <div className="svd-impact-card">
-                <div className="svd-impact-icon">💣</div>
-                <div className="svd-impact-title">
-                  {hasVersionDisclosure ? 'Targeted Exploitation' : 'Technology Fingerprinting'}
-                </div>
-                <div className="svd-impact-body">
-                  {hasVersionDisclosure
-                    ? <>Databases like <strong>CVE MITRE</strong> and <strong>NVD NIST</strong> list every known vulnerability per software version. An attacker can find a working exploit for your exact version in minutes.</>
-                    : 'Without a version number, an attacker cannot directly look up applicable CVEs. However, knowing the technology stack helps them craft technology-specific probes and social engineering attempts.'}
-                </div>
-              </div>
-              <div className="svd-impact-card">
-                <div className="svd-impact-icon">🔓</div>
-                <div className="svd-impact-title">Ease of Discovery</div>
-                <div className="svd-impact-body">
-                  {hasVersionDisclosure
-                    ? <>This information is visible to <em>anyone</em> — no special skills needed. Even a beginner attacker can use publicly available exploit code against an identified version.</>
-                    : 'The header is visible in every HTTP response — no authentication or special tools required. Removing it is low effort and reduces your server\'s passive fingerprint.'}
-                </div>
-              </div>
+            <div className="svd-scenario-box">
+              <div className="svd-scenario-label">Attack Scenario</div>
+              <p>{r.attackScenario}</p>
+              {r.likelihood && <p className="svd-scenario-likelihood"><strong>Likelihood:</strong> {r.likelihood}</p>}
             </div>
-            {r.attackScenario && (
-              <div className="svd-scenario-box">
-                <div className="svd-scenario-label">Real Attack Scenario</div>
-                <p>{r.attackScenario}</p>
-                {r.likelihood && <p><strong>Likelihood:</strong> {r.likelihood}</p>}
-              </div>
-            )}
             {r.cveNote && (
               <div className="svd-cve-note">
-                <span>⚠️ {r.cveNote}</span>
-                <div style={{ marginTop: '0.5rem' }}>
-                  <a href="https://cve.mitre.org/" target="_blank" rel="noopener noreferrer">Search CVE MITRE →</a>
-                  &nbsp;&nbsp;
-                  <a href="https://nvd.nist.gov/" target="_blank" rel="noopener noreferrer">Search NVD NIST →</a>
+                <strong>CVE Reference:</strong> {r.cveNote}
+                <div className="svd-cve-links">
+                  <a href="https://cve.mitre.org/" target="_blank" rel="noopener noreferrer">CVE MITRE</a>
+                  <a href="https://nvd.nist.gov/" target="_blank" rel="noopener noreferrer">NVD NIST</a>
                 </div>
               </div>
             )}
@@ -1019,15 +1055,11 @@ function ServerReport({ r }) {
         </div>
       )}
 
-      {/* ── How to fix it ── */}
+      {/* ── Remediation ── */}
       {(recs.length > 0 || Object.keys(configExamples).length > 0) && (
         <div className="section">
-          <div className="section-header">🛠️ How to Fix This</div>
+          <div className="section-header">Remediation</div>
           <div className="section-content">
-            <p style={{ marginBottom: '1rem' }}>
-              The goal is simple: <strong>stop your server from announcing what software it runs</strong>.
-              Below are the exact configuration changes needed based on your detected stack.
-            </p>
             {recs.length > 0 && (
               <div className="svd-recs-list">
                 {recs.map((rec, i) => (
@@ -1040,7 +1072,7 @@ function ServerReport({ r }) {
             )}
             {Object.keys(configExamples).length > 0 && (
               <div className="svd-config-blocks">
-                <div className="svd-config-intro">Copy and apply the relevant configuration for your server:</div>
+                <div className="svd-config-intro">Apply the configuration for your detected stack:</div>
                 {Object.entries(configExamples).map(([name, code]) => (
                   <div key={name} className="config-example-block">
                     <div className="config-example-title">{name}</div>
@@ -1051,31 +1083,30 @@ function ServerReport({ r }) {
             )}
             {r.verificationStep && (
               <div className="svd-verify-box">
-                <strong>✅ How to verify the fix worked:</strong>
+                <div className="svd-verify-title">Verification</div>
                 <p>{r.verificationStep}</p>
-                {r.expectedState && <p><em>Expected result after fix:</em> {r.expectedState}</p>}
+                {r.expectedState && <p className="svd-verify-expected"><strong>Expected result:</strong> {r.expectedState}</p>}
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* ── Nothing found — pass ── */}
+      {/* ── Pass state ── */}
       {nothingFound && !r.error && (
         <div className="section">
           <div className="section-content">
             <div className="svd-pass-box">
-              <div className="svd-pass-icon">✅</div>
+              <div className="svd-pass-check">&#10003;</div>
               <div className="svd-pass-title">No Version Information Leaked</div>
               <div className="svd-pass-body">
                 The server is not revealing any software names, version numbers, or technology stack
-                details in its HTTP headers or HTML source. This is the correct and secure behaviour.
+                details in its HTTP headers or HTML source.
               </div>
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }
@@ -1087,22 +1118,17 @@ function SslReport({ r }) {
   const host = r.host || 'Unknown';
   const grade = r.grade || r.localGrade || r.endpointGrade || 'N/A';
   const gradeKey = grade.replace(/\s*\(local\)\s*/i, '').trim();
-  const gradeColors = { A: '#28a745', 'A+': '#28a745', 'A-': '#28a745', B: '#17a2b8', C: '#ffc107', D: '#fd7e14', F: '#dc3545', '?': '#6c757d' };
+  const gradeColors = { 'A+':'#22c55e', A:'#22c55e', B:'#3b82f6', C:'#eab308', D:'#f97316', F:'#ef4444', '?':'#6b7280', 'N/A':'#6b7280' };
+  const gradeBg = { 'A+':'rgba(34,197,94,0.12)', A:'rgba(34,197,94,0.12)', B:'rgba(59,130,246,0.12)', C:'rgba(234,179,8,0.12)', D:'rgba(249,115,22,0.12)', F:'rgba(239,68,68,0.12)' };
   const status = r.localStatus || (r.localProtocol ? `Protocol: ${r.localProtocol}` : null);
-  const reportTitle = r.reportTitle || `SSL Report: ${host}${r.ipAddress ? ` (${r.ipAddress})` : ''}`;
-  const hasFullReport = !r.error && Array.isArray(r.certificates) && r.certificates.length > 0;
-  const hasLocalData = !!(r.localProtocol || r.localCipher);
-  const isLocalOnly = !hasFullReport && hasLocalData;
-  const gradeIsLocal = /\(local\)/i.test(grade);
-  const isNAGrade = gradeKey === 'N/A';
+  const reportTitle = r.reportTitle || `SSL Report: ${host}`;
+  const isLocal = !!(r.localProtocol || r.localGrade);
 
   if (r.error) {
     return (
       <div className="report-inner ssl-report">
         <div className="ssl-report-header">
-          <a href={SSL_LABS_HOME} target="_blank" rel="noopener noreferrer" className="ssl-labs-logo-link" title="Qualys SSL Labs">
-            <img src={SSL_LABS_LOGO} alt="Qualys SSL Labs" className="ssl-labs-logo" />
-          </a>
+          <a href={SSL_LABS_HOME} target="_blank" rel="noopener noreferrer" className="ssl-labs-logo-link" title="Qualys SSL Labs"><img src={SSL_LABS_LOGO} alt="Qualys SSL Labs" className="ssl-labs-logo" /></a>
           <div className="ssl-report-title">{reportTitle}</div>
         </div>
         <div className="site-info"><div className="site-url">{host}</div></div>
@@ -1111,150 +1137,198 @@ function SslReport({ r }) {
     );
   }
 
+  const hasFullReport = Array.isArray(r.certificates) && r.certificates.length > 0;
+  const cd = r.cipherDetails || {};
+  const ci = r.certInfo || null;
+  const assessment = r.assessment || [];
+
   return (
     <div className="report-inner ssl-report">
+      {/* ── Header ── */}
       <div className="ssl-report-header">
-        <a href={r.sslLabsUrl || SSL_LABS_HOME} target="_blank" rel="noopener noreferrer" className="ssl-labs-logo-link" title="Qualys SSL Labs">
-          <img src={SSL_LABS_LOGO} alt="Qualys SSL Labs" className="ssl-labs-logo" />
-        </a>
-        <div className="ssl-report-title">{reportTitle}</div>
-      </div>
-
-      {/* Site info with grade badge */}
-      <div className="site-info">
-        <div className="site-url">
-          <span className="pulse-dot" style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#22c55e', marginRight: 8, verticalAlign: 'middle' }} />
-          {host}{r.ipAddress ? ` (${r.ipAddress})` : ''}
-        </div>
-        <div className="scan-time" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span>SSL/TLS Security Analysis · Grade:</span>
-          <span style={{fontWeight:700,color:'#fff',background:gradeColors[gradeKey]||'#6c757d',padding:'2px 10px',borderRadius:'999px',fontSize:'0.82rem'}}>{grade}</span>
-          {status && <span>· {status}</span>}
-          {gradeIsLocal && <span style={{fontSize:'.75rem',color:'var(--text-secondary)',fontStyle:'italic'}}>(Local TLS handshake)</span>}
+        <a href={r.sslLabsUrl || SSL_LABS_HOME} target="_blank" rel="noopener noreferrer" className="ssl-labs-logo-link" title="Qualys SSL Labs"><img src={SSL_LABS_LOGO} alt="Qualys SSL Labs" className="ssl-labs-logo" /></a>
+        <div>
+          <div className="ssl-report-title">{reportTitle}</div>
+          <div className="ssl-report-host">{host}{r.ipAddress ? ` (${r.ipAddress})` : ''}</div>
         </div>
       </div>
 
-      {/* If grade is N/A and no local data, show prominent message */}
-      {/* SSL Labs API v4 setup notice */}
-      {r._needsV4Email && (
-        <div className="section" style={{ borderLeft: '4px solid #6366f1' }}>
-          <div className="section-header" style={{ background: 'linear-gradient(135deg, #3730a3, #4338ca)' }}>SSL Labs API v4 Not Configured — Limited Results</div>
-          <div className="section-content" style={{ fontSize: '.92rem', lineHeight: 1.7 }}>
-            <p style={{ margin: '0 0 8px' }}>
-              <strong>Qualys SSL Labs deprecated API v3 on January 1, 2024.</strong> Full certificate, cipher suite, and vulnerability reports now require a registered email with the new v4 API.
-            </p>
-            <p style={{ margin: '0 0 8px' }}>To enable full SSL reports:</p>
-            <ol style={{ margin: '0 0 10px', paddingLeft: 20 }}>
-              <li>Register your email (one-time) by sending a POST request:
-                <pre style={{ background: 'rgba(0,0,0,.25)', padding: '8px 12px', borderRadius: 6, fontSize: '.8rem', overflowX: 'auto', margin: '6px 0' }}>{`curl -X POST https://api.ssllabs.com/api/v4/register \\
-  -H "Content-Type: application/json" \\
-  -d '{"firstName":"Your","lastName":"Name","email":"you@yourorg.com","organization":"YourOrg"}'`}</pre>
-              </li>
-              <li>Add <code>SSL_LABS_EMAIL=you@yourorg.com</code> to your <code>.env</code> file</li>
-              <li>Restart the backend server</li>
-            </ol>
-            <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '.84rem' }}>
-              Note: SSL Labs requires an organizational/business email. Free email providers (Gmail, Yahoo, Hotmail) are not accepted for registration.
-            </p>
-          </div>
+      {/* ── Grade Banner ── */}
+      <div className="ssl-grade-banner" style={{background: gradeBg[gradeKey] || 'rgba(107,114,128,0.1)', borderLeft: `4px solid ${gradeColors[gradeKey] || '#6b7280'}`}}>
+        <div className="ssl-grade-circle" style={{background: gradeColors[gradeKey] || '#6b7280'}}>{gradeKey}</div>
+        <div className="ssl-grade-text">
+          <div className="ssl-grade-label">Overall Rating{isLocal && !hasFullReport ? ' (Local Analysis)' : ''}</div>
+          <div className="ssl-grade-status">{status || `Grade ${gradeKey}`}</div>
+          {isLocal && !hasFullReport && <div className="ssl-grade-note">Based on direct TLS handshake — SSL Labs could not reach this server</div>}
         </div>
-      )}
+      </div>
 
-      {isNAGrade && !hasLocalData && !hasFullReport && !r._needsV4Email && (
-        <div className="section" style={{ borderLeft: '4px solid #f59e0b' }}>
-          <div className="section-header" style={{ background: 'linear-gradient(135deg, #92400e, #b45309)' }}>Why is the grade N/A?</div>
-          <div className="section-content" style={{ fontSize: '.92rem', lineHeight: 1.7 }}>
-            <p style={{ margin: '0 0 10px' }}>SSL Labs could not fully analyze this server. Common reasons:</p>
-            <ul style={{ margin: '0 0 10px', paddingLeft: 20 }}>
-              <li>The server is behind a firewall or CDN that blocks SSL Labs scanners</li>
-              <li>The domain resolves to a private/internal IP address</li>
-              <li>SSL Labs is currently rate-limited or overloaded</li>
-              <li>There is no recent cached assessment available</li>
-            </ul>
-            <p style={{ margin: 0, fontWeight: 600 }}>Try running the scan again in a few minutes, or use the SSL Labs link below to trigger a fresh assessment.</p>
-          </div>
-        </div>
-      )}
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* ██  SECTION 1 — SUMMARY & ANALYSIS                ██ */}
+      {/* ═══════════════════════════════════════════════════ */}
 
-      {/* SSL Labs endpoint status messages */}
-      {Array.isArray(r.endpointMessages) && r.endpointMessages.length > 0 && (
+      {/* ── Security Observation ── */}
+      {r.observation && (
         <div className="section">
-          <div className="section-header">SSL Labs Endpoint Status</div>
+          <div className="section-header">Security Observation</div>
           <div className="section-content">
-            <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-              {r.endpointMessages.map((msg, i) => (
-                <li key={i} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ color: '#f59e0b', fontWeight: 600 }}>⚠</span>
-                  <span>{msg}</span>
-                </li>
-              ))}
-            </ul>
-            {hasLocalData && (
-              <p style={{ marginTop: '10px', fontSize: '.85rem', color: 'var(--text-secondary)' }}>
-                SSL Labs could not connect to the server endpoints directly. The analysis below is based on a local TLS handshake from our scanner.
-              </p>
+            <div className="ssl-observation-text">{r.observation}</div>
+            {r.observationFindings?.length > 0 && (
+              <div className="ssl-obs-findings">
+                {r.observationFindings.map((f, i) => (
+                  <div key={i} className={`ssl-obs-finding ssl-obs-${f.severity?.toLowerCase() || 'info'}`}>
+                    <div className="ssl-obs-finding-head">
+                      <span className="ssl-obs-sev-dot"></span>
+                      <strong>{f.title}</strong>
+                      <span className="ssl-obs-sev-tag">{f.severity}</span>
+                    </div>
+                    <p className="ssl-obs-finding-detail">{f.detail}</p>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
       )}
 
-      {/* Local TLS connection details — shown prominently when no full report */}
-      {hasLocalData && (
-        <div className="section" style={isLocalOnly ? { borderLeft: '4px solid #6366f1' } : {}}>
-          <div className="section-header">{hasFullReport ? 'Local TLS Verification' : 'TLS Connection Details'}</div>
+      {/* ── Security Assessment (local) ── */}
+      {assessment.length > 0 && !hasFullReport && (
+        <div className="section">
+          <div className="section-header">Security Assessment</div>
+          <div className="section-content">
+            <table className="ssl-report-table ssl-assessment-table">
+              <thead><tr><th style={{width:'28px'}}></th><th>Check</th><th>Result</th><th>Details</th></tr></thead>
+              <tbody>
+                {assessment.map((a, i) => (
+                  <tr key={i} className={`ssl-assess-${a.status}`}>
+                    <td className="ssl-assess-icon">{a.status === 'good' ? '✓' : a.status === 'warn' ? '⚠' : a.status === 'bad' ? '✗' : '—'}</td>
+                    <td><strong>{a.name}</strong></td>
+                    <td><code className="ssl-val">{a.value}</code></td>
+                    <td className="ssl-assess-detail">{a.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Summary ── */}
+      <div className="section"><div className="section-header">Summary</div><div className="section-content ssl-summary-text">{r.summary || ''}</div></div>
+
+      {/* ── Recommendation ── */}
+      <div className="section"><div className="section-header">Recommendation</div><div className="section-content ssl-summary-text">{r.recommendation || ''}</div></div>
+
+      {/* ═══════════════════════════════════════════════════ */}
+      {/* ██  SECTION 2 — TECHNICAL DETAILS                 ██ */}
+      {/* ═══════════════════════════════════════════════════ */}
+      <div className="ssl-section-divider">
+        <span className="ssl-section-divider-label">Technical Details</span>
+      </div>
+
+      {/* ── Server / TLS Details (local check) ── */}
+      {(r.localProtocol || r.localCipher) && !hasFullReport && (
+        <div className="section">
+          <div className="section-header">Server / TLS Configuration</div>
           <div className="section-content">
             <table className="ssl-report-table">
               <tbody>
-                {r.localProtocol && (
-                  <tr>
-                    <td><strong>Negotiated Protocol</strong></td>
-                    <td>
-                      <code>{r.localProtocol}</code>
-                      {/1\.3/i.test(r.localProtocol) && <span className="ssl-ok" style={{ marginLeft: 8, fontSize: '.78rem' }}>Excellent</span>}
-                      {/1\.2/i.test(r.localProtocol) && <span className="ssl-ok" style={{ marginLeft: 8, fontSize: '.78rem' }}>Good</span>}
-                      {/1\.[01]/i.test(r.localProtocol) && <span className="ssl-warn" style={{ marginLeft: 8, fontSize: '.78rem' }}>Outdated</span>}
-                    </td>
-                  </tr>
-                )}
-                {r.localCipher && (
-                  <tr>
-                    <td><strong>Cipher Suite</strong></td>
-                    <td><code>{r.localCipher}</code></td>
-                  </tr>
-                )}
-                {r.localStatus && (
-                  <tr>
-                    <td><strong>Connection Status</strong></td>
-                    <td><span className={r.localStatus.toLowerCase().includes('fail') ? 'ssl-warn' : 'ssl-ok'}>{r.localStatus}</span></td>
-                  </tr>
-                )}
-                {r.localGrade && (
-                  <tr>
-                    <td><strong>Local Grade</strong></td>
-                    <td>
-                      <span style={{fontWeight:700,color:'#fff',background:gradeColors[r.localGrade.replace(/\s*\(local\)\s*/i,'').trim()]||'#6c757d',padding:'1px 8px',borderRadius:'999px',fontSize:'0.78rem'}}>{r.localGrade}</span>
-                    </td>
-                  </tr>
-                )}
+                {r.localProtocol && <tr><td><strong>Negotiated protocol</strong></td><td><code className="ssl-val">{r.localProtocol}</code></td></tr>}
+                {r.localCipher && <tr><td><strong>Negotiated cipher suite</strong></td><td><code className="ssl-val">{r.localCipher}</code></td></tr>}
               </tbody>
             </table>
-            {isLocalOnly && (
-              <p style={{ marginTop: 12, fontSize: '.84rem', color: 'var(--text-secondary)', padding: '8px 12px', background: 'rgba(99,102,241,.06)', borderRadius: 6 }}>
-                This assessment was performed via a direct TLS handshake from our scanner. For full certificate chain, cipher suite enumeration, and vulnerability checks, use the Qualys SSL Labs link below.
-              </p>
-            )}
           </div>
         </div>
       )}
 
-      {/* Full SSL Labs report sections */}
+      {/* ── Cipher Suite Analysis (local) ── */}
+      {cd.name && !hasFullReport && (
+        <div className="section">
+          <div className="section-header">Cipher Suite Analysis</div>
+          <div className="section-content">
+            <table className="ssl-report-table">
+              <tbody>
+                <tr><td><strong>Key exchange</strong></td><td><code className="ssl-val">{cd.keyExchange}</code>{cd.forwardSecrecy && <span className="ssl-badge-good">Forward Secrecy</span>}</td></tr>
+                <tr><td><strong>Authentication</strong></td><td><code className="ssl-val">{cd.authentication}</code></td></tr>
+                <tr><td><strong>Encryption</strong></td><td><code className="ssl-val">{cd.encryption}{cd.bits ? ` (${cd.bits} bits)` : ''}</code></td></tr>
+                <tr><td><strong>Mode</strong></td><td><code className="ssl-val">{cd.mode}</code>{cd.aead && <span className="ssl-badge-good">AEAD</span>}</td></tr>
+                <tr><td><strong>MAC / Integrity</strong></td><td><code className="ssl-val">{cd.mac}</code></td></tr>
+                <tr><td><strong>Overall strength</strong></td><td><span className={`ssl-strength ssl-strength-${cd.strength}`}>{cd.strength === 'strong' ? 'Strong' : cd.strength === 'acceptable' ? 'Acceptable' : cd.strength === 'weak' ? 'Weak' : 'Unknown'}</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Certificate (local) ── */}
+      {ci && !hasFullReport && (
+        <div className="section">
+          <div className="section-header">Certificate{r.certTrusted === true ? '' : r.certTrusted === false ? ' — Validation Failed' : ''}</div>
+          <div className="section-content">
+            <table className="ssl-report-table cert-table">
+              <tbody>
+                {ci.commonName && <tr><td><strong>Common name</strong></td><td><code>{ci.commonName}</code></td></tr>}
+                {ci.altNames?.length > 0 && <tr><td><strong>Alternative names</strong></td><td><code className="mono-small">{ci.altNames.join('  ')}</code></td></tr>}
+                {ci.serialNumber && <tr><td><strong>Serial number</strong></td><td><code className="mono-small">{ci.serialNumber}</code></td></tr>}
+                {ci.validFrom && <tr><td><strong>Valid from</strong></td><td>{ci.validFrom}</td></tr>}
+                {ci.validUntil && <tr><td><strong>Valid until</strong></td><td>{ci.validUntil}</td></tr>}
+                {ci.issuerCN && <tr><td><strong>Issuer</strong></td><td>{ci.issuerCN}{ci.issuerOrg ? ` (${ci.issuerOrg})` : ''}</td></tr>}
+                {ci.ocsp?.length > 0 && <tr><td><strong>OCSP</strong></td><td><code className="mono-small">{ci.ocsp[0]}</code></td></tr>}
+                <tr><td><strong>Trusted</strong></td><td>{r.certTrusted === true ? <span className="ssl-ok">Yes — validated by OS certificate store</span> : r.certTrusted === false ? <span className="ssl-warn">No — certificate validation failed</span> : <span style={{color:'var(--text-muted)'}}>Unknown</span>}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Protocols (local enumeration) ── */}
+      {!hasFullReport && Array.isArray(r.protocols) && r.protocols.length > 0 && (
+        <div className="section">
+          <div className="section-header">Configuration — Protocols</div>
+          <div className="section-content">
+            <table className="ssl-report-table">
+              <tbody>
+                {r.protocols.map((p, i) => (
+                  <tr key={i}>
+                    <td><strong>{p.name}</strong></td>
+                    <td><span className={p.enabled && !p.insecure ? 'ssl-ok' : p.insecure ? 'ssl-warn' : ''}>{p.enabled ? 'Yes' : 'No'}</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Cipher Suites (local enumeration) ── */}
+      {!hasFullReport && Array.isArray(r.cipherSuites) && r.cipherSuites.length > 0 && (
+        <div className="section">
+          <div className="section-header">Cipher Suites</div>
+          <div className="section-content">
+            {r.cipherSuites.map((group, gi) => (
+              <div key={gi} className="cipher-group">
+                <div className="cipher-group-title">{group.protocol}{group.preference ? ' (server chooses the cipher)' : ''}</div>
+                <ul className="cipher-list">
+                  {group.suites?.map((s, si) => (
+                    <li key={si} className={s.weak ? 'ssl-cipher-weak' : ''}>
+                      {s.name}
+                      {s.kxType && ` — ${s.kxType}`}{s.cipherStrength ? `, ${s.cipherStrength} bits` : ''}
+                      {s.weak && <span className="ssl-weak-tag"> WEAK</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Full SSL Labs Report Sections ── */}
       {hasFullReport && (
         <>
           {r.certificates.map((cert, idx) => (
             <div className="section" key={idx}>
-              <div className="section-header">
-                Certificate #{idx + 1}{cert.keyAlg && cert.keySize ? `: ${cert.keyAlg} ${cert.keySize} bits` : ''}{cert.signatureAlgorithm ? ` (${cert.signatureAlgorithm})` : ''}
-              </div>
+              <div className="section-header">Certificate #{idx + 1}{cert.keyAlg && cert.keySize ? `: ${cert.keyAlg} ${cert.keySize} bits` : ''}{cert.signatureAlgorithm ? ` (${cert.signatureAlgorithm})` : ''}</div>
               <div className="section-content">
                 <table className="ssl-report-table cert-table">
                   <tbody>
@@ -1315,7 +1389,7 @@ function SslReport({ r }) {
               <div className="section-content">
                 {r.cipherSuites.map((group, gi) => (
                   <div key={gi} className="cipher-group">
-                    <div className="cipher-group-title">{group.protocol}{group.preference ? ' (server has preference)' : ''}</div>
+                    <div className="cipher-group-title">{group.protocol}{group.preference ? ' (server chooses the cipher)' : ''}</div>
                     <ul className="cipher-list">
                       {group.suites?.map((s, si) => (
                         <li key={si} className={s.weak ? 'ssl-cipher-weak' : ''}>
@@ -1385,28 +1459,21 @@ function SslReport({ r }) {
         </>
       )}
 
-      {/* Summary & Recommendation */}
-      {r.summary && <div className="section"><div className="section-header">Summary</div><div className="section-content">{r.summary}</div></div>}
-      {r.recommendation && <div className="section"><div className="section-header">Recommendation</div><div className="section-content">{r.recommendation}</div></div>}
-
-      {/* SSL Labs link */}
+      {/* ── Full SSL Labs Link ── */}
       {r.sslLabsUrl && (
         <div className="section">
           <div className="section-header">Full SSL Labs Report</div>
           <div className="section-content">
-            <a href={r.sslLabsUrl} target="_blank" rel="noopener noreferrer" className="ssl-labs-report-link">
-              Open SSL Server Test for {host} →
-            </a>
-            {!hasFullReport && <p className="ssl-report-note">Certificate details, cipher suites, chain, and grading are available in the full Qualys SSL Labs report. Run scan again after a recent SSL Labs test to get inline details.</p>}
+            <a href={r.sslLabsUrl} target="_blank" rel="noopener noreferrer" className="ssl-labs-report-link">Open SSL Server Test for {host} →</a>
+            {!hasFullReport && <p className="ssl-report-note">Certificate details, cipher suites, chain, and full grading are available in the Qualys SSL Labs report. Run a scan on the SSL Labs website first, then re-scan here to pull cached results inline.</p>}
           </div>
         </div>
       )}
 
+      {/* ── Footer ── */}
       <div className="ssl-report-footer">
-        <a href={SSL_LABS_HOME} target="_blank" rel="noopener noreferrer" className="ssl-labs-logo-link">
-          <img src={SSL_LABS_LOGO} alt="Qualys SSL Labs" className="ssl-labs-logo small" />
-        </a>
-        <span className="ssl-report-copyright">SSL Report. For full certificate and cipher analysis see <a href={r.sslLabsUrl || SSL_LABS_HOME} target="_blank" rel="noopener noreferrer">Qualys SSL Labs</a>. © Qualys, Inc.</span>
+        <a href={SSL_LABS_HOME} target="_blank" rel="noopener noreferrer" className="ssl-labs-logo-link"><img src={SSL_LABS_LOGO} alt="Qualys SSL Labs" className="ssl-labs-logo small" /></a>
+        <span className="ssl-report-copyright">SSL Server Rating Guide based on <a href="https://www.ssllabs.com/projects/rating-guide/" target="_blank" rel="noopener noreferrer">Qualys SSL Labs</a> methodology. © Qualys, Inc.</span>
       </div>
     </div>
   );
@@ -1415,50 +1482,93 @@ function SslReport({ r }) {
 function ErrorHandlingReport({ r }) {
   const d = r.targetDomain || 'Unknown';
   const risk = r.riskLevel || 'Unknown';
-  const riskColors = { High: '#dc3545', Medium: '#fd7e14', Low: '#28a745', Unknown: '#6c757d' };
-  const severityColors = { High: '#dc3545', Medium: '#fd7e14', Low: '#ffc107' };
+  const riskMeta = { High: {color:'#ef4444',bg:'rgba(239,68,68,0.1)'}, Medium: {color:'#f97316',bg:'rgba(249,115,22,0.1)'}, Low: {color:'#22c55e',bg:'rgba(34,197,94,0.1)'}, Unknown: {color:'#6b7280',bg:'rgba(107,114,128,0.08)'} }[risk] || {color:'#6b7280',bg:'rgba(107,114,128,0.08)'};
+  const sevColors = { High: '#ef4444', Medium: '#f97316', Low: '#eab308' };
   const findings = r.findings || [];
   const probes = r.probes || [];
   const count = r.sensitiveLeaked?.length ?? 0;
+  const successProbes = probes.filter(p => !p.error);
+  const hitProbes = probes.filter(p => (p.indicatorsCount || 0) > 0);
+
   return (
-    <div className="report-inner">
+    <div className="report-inner err-report">
+      {/* ── Header ── */}
       <div className="site-info">
         <div className="site-url">{d}</div>
-        <div className="scan-time">
-          Improper Error Handling Analysis{r.scannedAt ? ` · ${new Date(r.scannedAt).toLocaleString()}` : ''}
-        </div>
+        <div className="scan-time">Improper Error Handling Analysis{r.scannedAt ? ` · ${new Date(r.scannedAt).toLocaleString()}` : ''}</div>
       </div>
-      <div className="cors-summary-block">
-        <div className="cors-summary-item">
-          <span className="cors-summary-label">Overall Risk</span>
-          <span className="cors-summary-value" style={{ color: riskColors[risk] || '#6c757d' }}>{risk}</span>
+
+      {r.error && <div className="err-error-bar"><span className="err-error-icon">!</span> {r.error}</div>}
+
+      {/* ── Risk Banner ── */}
+      {!r.error && (
+        <div className="err-risk-banner" style={{borderLeft:`4px solid ${riskMeta.color}`, background: riskMeta.bg}}>
+          <div className="err-risk-badge" style={{background: riskMeta.color}}>{risk.charAt(0)}</div>
+          <div className="err-risk-text">
+            <div className="err-risk-title">Risk Level: {risk}</div>
+            <div className="err-risk-subtitle">{count > 0 ? `${count} disclosure indicator${count !== 1 ? 's' : ''} detected across ${hitProbes.length} probe${hitProbes.length !== 1 ? 's' : ''}` : 'No information disclosure indicators detected'}</div>
+          </div>
+          <div className="err-risk-stats">
+            <div className="err-rstat"><span className="err-rstat-num">{successProbes.length}</span><span className="err-rstat-lbl">Probes</span></div>
+            <div className="err-rstat"><span className="err-rstat-num" style={{color: hitProbes.length > 0 ? '#ef4444' : '#22c55e'}}>{hitProbes.length}</span><span className="err-rstat-lbl">With findings</span></div>
+            <div className="err-rstat"><span className="err-rstat-num" style={{color: count > 0 ? '#ef4444' : '#22c55e'}}>{count}</span><span className="err-rstat-lbl">Indicators</span></div>
+            {r.probeStatus && <div className="err-rstat"><span className="err-rstat-num">{r.probeStatus}</span><span className="err-rstat-lbl">HTTP status</span></div>}
+          </div>
         </div>
-        <div className="cors-summary-item">
-          <span className="cors-summary-label">Probe status</span>
-          <span className="cors-summary-value">{r.probeStatus ?? '—'}</span>
+      )}
+
+      {/* ── Executive Summary ── */}
+      {r.executiveSummary && (
+        <div className="section"><div className="section-header">Executive Summary</div>
+          <div className="section-content err-summary-text">{r.executiveSummary}</div>
         </div>
-        <div className="cors-summary-item">
-          <span className="cors-summary-label">Indicators found</span>
-          <span className="cors-summary-value">{count}</span>
+      )}
+
+      {/* ── Findings ── */}
+      {findings.length > 0 && (
+        <div className="section">
+          <div className="section-header">Disclosure Findings ({findings.length})</div>
+          <div className="section-content">
+            {findings.map((f, i) => (
+              <div key={i} className="err-finding-card" style={{borderLeftColor: sevColors[f.severity] || '#6b7280'}}>
+                <div className="err-finding-top">
+                  <span className="err-sev-dot" style={{background: sevColors[f.severity] || '#6b7280'}}></span>
+                  <strong className="err-finding-cat">{f.category}</strong>
+                  <span className="err-sev-pill" style={{background: (sevColors[f.severity] || '#6b7280') + '22', color: sevColors[f.severity] || '#6b7280', border: `1px solid ${sevColors[f.severity] || '#6b7280'}44`}}>{f.severity}</span>
+                </div>
+                <table className="err-finding-table"><tbody>
+                  <tr><td className="err-td-label">Evidence</td><td>{(f.evidence || []).map((e, j) => <div key={j}><code className="err-evidence-code">{e}</code></div>)}</td></tr>
+                  {f.probes?.length > 0 && <tr><td className="err-td-label">Triggered by</td><td className="err-triggered">{f.probes.join('; ')}</td></tr>}
+                  {f.impact && <tr><td className="err-td-label">Impact</td><td>{f.impact}</td></tr>}
+                  {f.remediation && <tr><td className="err-td-label">Remediation</td><td>{f.remediation}</td></tr>}
+                </tbody></table>
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="cors-summary-item">
-          <span className="cors-summary-label">Probes run</span>
-          <span className="cors-summary-value">{probes.length || 1}</span>
+      )}
+
+      {/* ── Response Snippet ── */}
+      {r.responseSnippet && (
+        <div className="section"><div className="section-header">Response Snippet</div>
+          <div className="section-content"><pre className="err-snippet">{r.responseSnippet}</pre></div>
         </div>
-      </div>
-      {r.error && <div className="section"><div className="section-content" style={{ color: 'var(--danger)' }}>{r.error}</div></div>}
+      )}
+
+      {/* ── Probes Table ── */}
       {probes.length > 0 && (
         <div className="section">
-          <div className="section-header">Probes performed</div>
+          <div className="section-header">Probes Performed ({probes.length})</div>
           <div className="section-content">
-            <table className="cors-config-table" style={{ marginTop: 0 }}>
-              <thead><tr><th>URL</th><th>Status</th><th>Indicators</th></tr></thead>
+            <table className="err-probes-table">
+              <thead><tr><th>Probe</th><th>Method</th><th>Status</th><th>Findings</th></tr></thead>
               <tbody>
                 {probes.map((p, i) => (
-                  <tr key={i}>
-                    <td><code style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>{p.probeUrl}</code></td>
-                    <td>{p.statusCode ?? (p.error ? 'Error' : '—')}</td>
-                    <td>{p.indicatorsCount ?? 0}</td>
+                  <tr key={i} className={(p.indicatorsCount || 0) > 0 ? 'err-probe-hit' : ''}>
+                    <td><div className="err-probe-label">{p.probeLabel || 'Probe'}</div><code className="err-probe-url">{p.probeUrl}</code></td>
+                    <td><code className="err-probe-method">{p.method || 'GET'}</code></td>
+                    <td className={`err-probe-status ${p.error ? 'err-s-error' : (p.statusCode || 0) >= 500 ? 'err-s-5xx' : (p.statusCode || 0) >= 400 ? 'err-s-4xx' : ''}`}>{p.statusCode ?? (p.error ? 'Err' : '—')}</td>
+                    <td className={`err-probe-count ${(p.indicatorsCount || 0) > 0 ? 'err-c-hit' : 'err-c-clean'}`}>{p.indicatorsCount ?? 0}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1466,57 +1576,179 @@ function ErrorHandlingReport({ r }) {
           </div>
         </div>
       )}
+
+      {/* ── Recommendation ── */}
+      <div className="section"><div className="section-header">Recommendation</div>
+        <div className="section-content err-summary-text">{r.recommendation || ''}</div>
+      </div>
+
+      {/* ── References ── */}
+      {r.references?.length > 0 && (
+        <div className="section"><div className="section-header">References</div>
+          <div className="section-content"><ul className="err-refs-list">{r.references.map((ref, i) => <li key={i}>{ref}</li>)}</ul></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SensitiveDataReport({ r }) {
+  const d = r.targetDomain || 'Unknown';
+  const risk = r.riskLevel || 'Unknown';
+  const riskMeta = { High: {color:'#ef4444',bg:'rgba(239,68,68,0.1)',label:'Critical Exposure'}, Medium: {color:'#f97316',bg:'rgba(249,115,22,0.1)',label:'Moderate Exposure'}, Low: {color:'#eab308',bg:'rgba(234,179,8,0.1)',label:'Minor Exposure'}, None: {color:'#22c55e',bg:'rgba(34,197,94,0.1)',label:'No Exposure Detected'}, Unknown: {color:'#6b7280',bg:'rgba(107,114,128,0.08)',label:'Scan Incomplete'} }[risk] || {color:'#6b7280',bg:'rgba(107,114,128,0.08)',label:risk};
+  const sevColors = { High: '#ef4444', Medium: '#f97316', Low: '#eab308' };
+  const findings = r.findings || [];
+  const headerIssues = r.headerIssues || [];
+  const stats = r.piiStats || {};
+  const totalPii = r.totalPiiInstances || 0;
+  const totalCats = r.totalCategories || 0;
+  const compliance = r.compliance || [];
+
+  return (
+    <div className="report-inner pii-report">
+      <div className="site-info">
+        <div className="site-url">{d}</div>
+        <div className="scan-time">Sensitive Data Exposure Analysis{r.scannedAt ? ` · ${new Date(r.scannedAt).toLocaleString()}` : ''}</div>
+      </div>
+
+      {r.error && <div className="pii-error-bar"><span className="pii-error-icon">!</span> {r.error}</div>}
+
+      {!r.error && (
+        <div className="pii-risk-banner" style={{borderLeft:`4px solid ${riskMeta.color}`, background: riskMeta.bg}}>
+          <div className="pii-risk-badge" style={{background: riskMeta.color}}>{risk === 'None' ? '✓' : risk.charAt(0)}</div>
+          <div className="pii-risk-text">
+            <div className="pii-risk-title">{riskMeta.label}</div>
+            <div className="pii-risk-subtitle">{totalPii > 0 ? `${totalPii} PII instance${totalPii !== 1 ? 's' : ''} across ${totalCats} categor${totalCats !== 1 ? 'ies' : 'y'}` : 'No cleartext PII detected in the API response'}</div>
+          </div>
+          <div className="pii-risk-stats">
+            <div className="pii-rstat"><span className="pii-rstat-num" style={{color: totalPii > 0 ? '#ef4444' : '#22c55e'}}>{totalPii}</span><span className="pii-rstat-lbl">PII found</span></div>
+            <div className="pii-rstat"><span className="pii-rstat-num">{totalCats}</span><span className="pii-rstat-lbl">Categories</span></div>
+            <div className="pii-rstat"><span className="pii-rstat-num" style={{color: headerIssues.length > 0 ? '#f97316' : '#22c55e'}}>{headerIssues.length}</span><span className="pii-rstat-lbl">Header issues</span></div>
+            {r.httpStatus && <div className="pii-rstat"><span className="pii-rstat-num">{r.httpStatus}</span><span className="pii-rstat-lbl">HTTP status</span></div>}
+          </div>
+        </div>
+      )}
+
       {r.executiveSummary && (
-        <div className="section">
-          <div className="section-header">Executive Summary</div>
-          <div className="section-content executive-summary">{r.executiveSummary}</div>
+        <div className="section"><div className="section-header">Executive Summary</div>
+          <div className="section-content pii-summary-text">{r.executiveSummary}</div>
         </div>
       )}
-      {r.simpleTerms && (
-        <div className="section">
-          <div className="section-header">In simple terms</div>
-          <div className="section-content cors-simple-terms">{r.simpleTerms}</div>
-        </div>
-      )}
+
       {findings.length > 0 && (
         <div className="section">
-          <div className="section-header">Technical findings</div>
+          <div className="section-header">PII / Sensitive Data Findings ({findings.length})</div>
           <div className="section-content">
             {findings.map((f, i) => (
-              <div key={i} className="cors-finding-card">
-                <div className="cors-finding-header">
-                  <span className="cors-finding-severity" style={{ backgroundColor: severityColors[f.severity] || '#6c757d' }}>{f.severity}</span>
-                  <span className="cors-finding-title">{f.category}</span>
+              <div key={i} className="pii-finding-card" style={{borderLeftColor: sevColors[f.severity] || '#6b7280'}}>
+                <div className="pii-finding-top">
+                  <span className="pii-sev-dot" style={{background: sevColors[f.severity] || '#6b7280'}}></span>
+                  <strong className="pii-finding-cat">{f.category}</strong>
+                  <span className="pii-sev-pill" style={{background: (sevColors[f.severity] || '#6b7280') + '22', color: sevColors[f.severity] || '#6b7280', border: `1px solid ${sevColors[f.severity] || '#6b7280'}44`}}>{f.severity}</span>
                 </div>
-                <div className="cors-finding-body">
-                  <p><strong>Evidence in response:</strong> <code>{(f.evidence || []).join(', ')}</code></p>
-                  {f.impact && <p><strong>Impact:</strong> {f.impact}</p>}
-                  {f.remediation && <p><strong>Remediation:</strong> {f.remediation}</p>}
-                </div>
+                <table className="pii-finding-table"><tbody>
+                  <tr><td className="pii-td-label">Exposed Data</td><td>{(f.evidence || []).map((e, j) => (
+                    <div key={j} className="pii-evidence-row">
+                      <code className="pii-evidence-value">{e.value}</code>
+                    </div>
+                  ))}</td></tr>
+                  <tr><td className="pii-td-label">Location</td><td>{(f.evidence || []).map((e, j) => (
+                    <div key={j} className="pii-evidence-row">
+                      {e.field && <span className="pii-evidence-field">Field: <code>{e.field}</code></span>}
+                      {e.path && <span className="pii-evidence-path">Path: <code>{e.path}</code></span>}
+                    </div>
+                  ))}</td></tr>
+                  <tr><td className="pii-td-label">Detection</td><td>{(f.evidence || []).slice(0, 1).map((e, j) => (
+                    <span key={j} className="pii-detection-text">{e.detectionMethod || (e.source === 'json_field' ? 'Sensitive field name match' : 'Regex pattern match')}</span>
+                  ))}</td></tr>
+                  <tr><td className="pii-td-label">Impact</td><td className="pii-impact-text">{f.impact}</td></tr>
+                  <tr><td className="pii-td-label">Remediation</td><td className="pii-remediation-text">{f.remediation}</td></tr>
+                </tbody></table>
               </div>
             ))}
           </div>
         </div>
       )}
-      {r.responseSnippet && (
+
+      {headerIssues.length > 0 && (
         <div className="section">
-          <div className="section-header">Response snippet (where leakage was found)</div>
+          <div className="section-header">Response Header Issues ({headerIssues.length})</div>
           <div className="section-content">
-            <pre style={{ fontSize: '0.75rem', overflow: 'auto', maxHeight: '8rem', padding: '0.5rem', background: 'var(--bg-muted)', borderRadius: 4 }}>{r.responseSnippet}</pre>
+            {headerIssues.map((h, i) => (
+              <div key={i} className="pii-finding-card" style={{borderLeftColor: sevColors[h.severity] || '#6b7280'}}>
+                <div className="pii-finding-top">
+                  <span className="pii-sev-dot" style={{background: sevColors[h.severity] || '#6b7280'}}></span>
+                  <strong className="pii-finding-cat">{h.header}: {h.issue}</strong>
+                  <span className="pii-sev-pill" style={{background: (sevColors[h.severity] || '#6b7280') + '22', color: sevColors[h.severity] || '#6b7280', border: `1px solid ${sevColors[h.severity] || '#6b7280'}44`}}>{h.severity}</span>
+                </div>
+                <table className="pii-finding-table"><tbody>
+                  <tr><td className="pii-td-label">Detail</td><td>{h.detail}</td></tr>
+                  <tr><td className="pii-td-label">Fix</td><td className="pii-remediation-text">{h.fix}</td></tr>
+                </tbody></table>
+              </div>
+            ))}
           </div>
         </div>
       )}
-      {r.sensitiveLeaked?.length ? (
+
+      {compliance.length > 0 && (
         <div className="section">
-          <div className="section-header">Sensitive content in error response</div>
-          <div className="section-content"><ul>{r.sensitiveLeaked.map((x, i) => <li key={i}><code>{x}</code></li>)}</ul></div>
+          <div className="section-header">Compliance Violations</div>
+          <div className="section-content">
+            {compliance.map((c, i) => (
+              <div key={i} className="pii-compliance-card">
+                <strong className="pii-compliance-std">{c.standard}</strong>
+                <p className="pii-compliance-detail">{c.detail}</p>
+              </div>
+            ))}
+          </div>
         </div>
-      ) : null}
-      <div className="section"><div className="section-header">Recommendation</div><div className="section-content">{r.recommendation || ''}</div></div>
-      {r.references?.length > 0 && (
+      )}
+
+      {Object.keys(stats).length > 0 && (
         <div className="section">
-          <div className="section-header">References</div>
-          <div className="section-content"><ul className="cors-refs-list">{r.references.map((ref, i) => <li key={i}>{ref}</li>)}</ul></div>
+          <div className="section-header">PII Breakdown</div>
+          <div className="section-content">
+            <table className="pii-stats-table">
+              <thead><tr><th>Category</th><th>Instances</th><th>Severity</th></tr></thead>
+              <tbody>
+                {Object.entries(stats).map(([cat, cnt], i) => {
+                  const f = findings.find(x => x.category === cat);
+                  return (
+                    <tr key={i}>
+                      <td>{cat}</td>
+                      <td><strong>{cnt}</strong></td>
+                      <td><span className="pii-sev-pill" style={{background: (sevColors[f?.severity] || '#6b7280') + '22', color: sevColors[f?.severity] || '#6b7280', border: `1px solid ${sevColors[f?.severity] || '#6b7280'}44`}}>{f?.severity || 'Unknown'}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {r.recommendation && (
+        <div className="section"><div className="section-header">Recommendation</div>
+          <div className="section-content pii-summary-text">{r.recommendation}</div>
+        </div>
+      )}
+
+      {!r.error && (
+        <div className="section">
+          <div className="section-header">Scan Metadata</div>
+          <div className="section-content">
+            <table className="pii-stats-table">
+              <tbody>
+                <tr><td><strong>Endpoint</strong></td><td><code className="pii-evidence-path">{r.originalUrl || d}</code></td></tr>
+                <tr><td><strong>HTTP Status</strong></td><td>{r.httpStatus}</td></tr>
+                <tr><td><strong>Content-Type</strong></td><td><code>{r.contentType || 'unknown'}</code></td></tr>
+                <tr><td><strong>Response Size</strong></td><td>{r.responseSize != null ? `${(r.responseSize / 1024).toFixed(1)} KB` : '—'}</td></tr>
+                <tr><td><strong>Analysis Method</strong></td><td>{r.isJson ? 'JSON tree walk + regex pattern matching' : 'Response body text regex scanning'}</td></tr>
+                <tr><td><strong>Scanned At</strong></td><td>{r.scannedAt ? new Date(r.scannedAt).toLocaleString() : '—'}</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
     </div>
@@ -1578,8 +1810,318 @@ function findSessionValues(obj, prefix = '') {
   return found;
 }
 
+const DEFAULT_SELECTED_TESTS = TESTING_METHODS.filter((m) => m.value !== 'cors').map((m) => m.value);
+
+function ScanDropdownPortal({ anchorRef, children }) {
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    const update = () => {
+      if (!anchorRef.current) return;
+      const rect = anchorRef.current.getBoundingClientRect();
+      const dropW = 330;
+      let left = rect.right - dropW;
+      if (left < 8) left = 8;
+      if (left + dropW > window.innerWidth - 8) left = window.innerWidth - dropW - 8;
+      let top = rect.bottom + 6;
+      const maxH = window.innerHeight * 0.7;
+      if (top + maxH > window.innerHeight - 12) {
+        top = rect.top - maxH - 6;
+        if (top < 8) top = 8;
+      }
+      setPos({ top, left });
+    };
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [anchorRef]);
+
+  return createPortal(
+    <div className="pm-scan-dropdown" style={{ top: pos.top, left: pos.left }}>
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
+/* Splits a curl command into highlighted tokens. Every value a user may want
+   to change (URL, header name/value, body, flag argument) carries `edit`:
+   its exact character range in `normalized` plus the quote wrapping it, so
+   an inline edit can replace just those characters and leave the rest of
+   the command byte-for-byte intact. */
+function tokenizeCurlLines(normalized) {
+  const rawLines = [];
+  let cur = '', curStart = 0, inSingle = false, inDouble = false;
+  for (let i = 0; i < normalized.length; i++) {
+    const ch = normalized[i];
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    if (ch === '\n' && !inSingle && !inDouble) {
+      rawLines.push({ text: cur, start: curStart });
+      cur = ''; curStart = i + 1;
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) rawLines.push({ text: cur, start: curStart });
+
+  const quoted = (s) => s.match(/^'((?:[^'\\]|\\.)*)'/) || s.match(/^"((?:[^"\\]|\\.)*)"/);
+
+  return rawLines.map(({ text, start }) => {
+    const trailingBs = text.endsWith('\\') && !text.endsWith('\\\\');
+    const body = trailingBs ? text.slice(0, -1).trimEnd() : text;
+    const lead = body.length - body.trimStart().length;
+    let rest = body.slice(lead);
+    let pos = start + lead;
+    const tokens = [];
+    // `quote` undefined = not editable; null = editable, unquoted.
+    const take = (cls, len, quote) => {
+      const t = rest.slice(0, len);
+      tokens.push(quote === undefined ? { cls, text: t } : { cls, text: t, edit: { start: pos, end: pos + len, quote } });
+      rest = rest.slice(len);
+      pos += len;
+    };
+
+    if (/^curl\b/.test(rest)) take('ch-kw', 4);
+    while (rest.length > 0) {
+      const sp = rest.match(/^\s+/);
+      if (sp) { take('', sp[0].length); continue; }
+      const flagMatch = rest.match(/^(--[\w-]+|-[a-zA-Z])(\s*)/);
+      if (flagMatch) {
+        const flag = flagMatch[1];
+        const isHeader = flag === '-H' || flag === '--header';
+        const isData   = flag === '-d' || flag === '--data' || flag === '--data-raw' || flag === '--data-binary';
+        take(isHeader ? 'ch-flag-h' : isData ? 'ch-flag-d' : 'ch-flag', flag.length);
+        if (flagMatch[2]) take('', flagMatch[2].length);
+        const m = quoted(rest);
+        if (m) {
+          const q = m[0][0];
+          const inner = m[1];
+          const ci = inner.indexOf(':');
+          if (isHeader && ci > 0) {
+            take('ch-quote', 1);
+            take('ch-hdr-key', ci, q);
+            take('ch-hdr-colon', 1);
+            const val = inner.slice(ci + 1);
+            const vLead = val.length - val.trimStart().length;
+            if (vLead) take('', vLead);
+            take('ch-hdr-val', val.length - vLead, q);
+            take('ch-quote', 1);
+          } else {
+            const cls = isData ? 'ch-body' : 'ch-str';
+            take(cls, 1);
+            take(cls, inner.length, q);
+            take(cls, 1);
+          }
+        }
+        continue;
+      }
+      const url = rest.match(/^https?:\/\/\S+/);
+      if (url) { take('ch-url', url[0].length, null); continue; }
+      const m2 = quoted(rest);
+      if (m2) {
+        take('ch-str', 1);
+        take('ch-str', m2[1].length, m2[0][0]);
+        take('ch-str', 1);
+        continue;
+      }
+      const word = rest.match(/^\S+/);
+      if (word) { take('ch-plain', word[0].length, null); continue; }
+      break;
+    }
+    return { tokens, trailingBs };
+  });
+}
+
+/* Read-only highlighter; pass `onChange(nextRaw)` to make values editable in
+   place. `onChange` returns an error message to reject the edit, or null. */
+function CurlHighlight({ raw, onChange }) {
+  const [editing, setEditing] = useState(null);
+  const [error, setError] = useState('');
+  const settledRef = useRef(true);
+
+  if (!raw) return null;
+  const normalized = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = tokenizeCurlLines(normalized);
+  const editable = typeof onChange === 'function';
+
+  const begin = (tok) => {
+    settledRef.current = false;
+    setError('');
+    setEditing({ ...tok.edit, value: tok.text, multiline: tok.text.includes('\n') || tok.text.length > 60 });
+  };
+
+  const cancel = () => {
+    settledRef.current = true;
+    setEditing(null);
+    setError('');
+  };
+
+  const commit = () => {
+    if (!editing) return;
+    const { start, end, quote, value } = editing;
+    if (value === normalized.slice(start, end)) { cancel(); return; }
+    if (quote === "'" && value.includes("'")) {
+      setError("This value is wrapped in single quotes ('), so it can't contain a ' character.");
+      return;
+    }
+    if (quote === '"' && /(^|[^\\])"/.test(value)) {
+      setError('This value is wrapped in double quotes ("), so a " inside it must be written as \\".');
+      return;
+    }
+    if (quote === null && !value.trim()) { setError("This value can't be empty."); return; }
+    if (quote === null && /\s/.test(value)) {
+      setError("This value isn't quoted, so it can't contain spaces.");
+      return;
+    }
+    const rejection = onChange(normalized.slice(0, start) + value + normalized.slice(end));
+    if (rejection) { setError(rejection); return; }
+    cancel();
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); cancel(); return; }
+    if (e.key === 'Enter' && (!editing?.multiline || e.metaKey || e.ctrlKey)) { e.preventDefault(); commit(); }
+  };
+
+  const renderToken = (tok, key) => {
+    if (editable && tok.edit) {
+      if (editing && editing.start === tok.edit.start) {
+        const common = {
+          key,
+          className: `ch-inline-input ${tok.cls}`,
+          value: editing.value,
+          autoFocus: true,
+          spellCheck: false,
+          onFocus: (e) => e.target.select(),
+          onChange: (e) => { setError(''); setEditing((prev) => ({ ...prev, value: e.target.value })); },
+          onKeyDown: onKey,
+          onBlur: () => { if (!settledRef.current) commit(); },
+          'aria-label': 'Edit value',
+        };
+        return editing.multiline
+          ? <textarea {...common} rows={Math.min(12, editing.value.split('\n').length + 1)} />
+          : <input {...common} size={Math.max(editing.value.length + 1, 6)} />;
+      }
+      return (
+        <span
+          key={key}
+          className={`${tok.cls} ch-editable`}
+          role="button"
+          tabIndex={0}
+          title="Click to edit"
+          onClick={() => begin(tok)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); begin(tok); } }}
+        >
+          {tok.text}
+        </span>
+      );
+    }
+    return <span key={key} className={tok.cls || undefined}>{tok.text}</span>;
+  };
+
+  return (
+    <div className="pm-curl-highlight-wrap">
+      <div className={`pm-curl-highlight${editable ? ' pm-curl-highlight--editable' : ''}`}>
+        {lines.map((line, i) => (
+          <div key={i} className="pm-curl-highlight-line">
+            <span className="pm-curl-ln">{i + 1}</span>
+            <span className="pm-curl-lc">
+              {line.tokens.map(renderToken)}
+              {line.trailingBs && <span className="ch-bs"> \</span>}
+            </span>
+          </div>
+        ))}
+      </div>
+      {editable && (
+        <div className={`ch-inline-bar${error ? ' ch-inline-bar--error' : ''}`} role={error ? 'alert' : undefined}>
+          {error
+            ? <>⚠ {error}</>
+            : editing
+              ? (editing.multiline ? '⌘/Ctrl + Enter to save · Esc to cancel' : 'Enter to save · Esc to cancel')
+              : 'Click any highlighted value to edit it in place'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function collapseLineContinuations(s) {
+  let out = '';
+  let inSingle = false, inDouble = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "'" && !inDouble) { inSingle = !inSingle; out += ch; }
+    else if (ch === '"' && !inSingle) { inDouble = !inDouble; out += ch; }
+    else if (ch === '\\' && !inSingle && !inDouble && (s[i + 1] === '\n' || s[i + 1] === '\r')) {
+      i++; if (s[i + 1] === '\n') i++;
+    } else { out += ch; }
+  }
+  return out;
+}
+
+const parseCurlCommand = (str) => {
+  try {
+    let s = str.trim().replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    s = collapseLineContinuations(s);
+    if (s.startsWith('curl ') || s === 'curl') s = s.slice(5);
+    else if (s.startsWith('curl')) s = s.slice(4);
+    let url = '';
+    const urlMatch = s.match(/(?:--url\s+|(?<=^|\s))(['"])(https?:\/\/[^\1]+?)\1(?=\s|$)/) ||
+                     s.match(/(?:--url\s+)(https?:\/\/\S+)/) ||
+                     s.match(/(https?:\/\/[^\s'"]+)/);
+    if (urlMatch) url = urlMatch[2] || urlMatch[1];
+    const hdrReSingle = /(?:-H|--header)\s+'([^']+)'/gi;
+    const hdrReDouble = /(?:-H|--header)\s+"((?:[^"\\]|\\.)*)"/gi;
+    const reqHeaders = []; let hm; let hid = Date.now();
+    for (const re of [hdrReSingle, hdrReDouble]) {
+      re.lastIndex = 0;
+      while ((hm = re.exec(s)) !== null) {
+        const raw = hm[1].replace(/\\"/g, '"').replace(/\\'/g, "'");
+        const ci = raw.indexOf(':');
+        if (ci > 0) reqHeaders.push({ id: ++hid, key: raw.slice(0, ci).trim(), value: raw.slice(ci + 1).trim(), enabled: true });
+      }
+    }
+    const bodyMatch = s.match(/(?:--data-binary|--data-raw|--data|-d)\s+'((?:[^'\\]|\\.)*)'/i) ||
+                      s.match(/(?:--data-binary|--data-raw|--data|-d)\s+"((?:[^"\\]|\\.)*)"/i) ||
+                      s.match(/(?:--data-binary|--data-raw|--data|-d)\s+(\S+)/i);
+    const bodyContent = bodyMatch ? bodyMatch[1].replace(/\\'/g, "'").replace(/\\"/g, '"') : '';
+    const methodMatch = s.match(/(?:-X|--request)\s+([A-Z]+)/i);
+    let method = methodMatch ? methodMatch[1].toUpperCase() : (bodyContent ? 'POST' : 'GET');
+    let bodyType = 'none';
+    if (bodyContent) {
+      try { JSON.parse(bodyContent); bodyType = 'json'; } catch { bodyType = 'raw'; }
+    }
+    return { method, url, reqHeaders, bodyType, bodyContent, error: null };
+  } catch (e) { return { error: `Parse error: ${e.message}` }; }
+};
+
+const buildCurlCommand = (curl) => {
+  const parts = [`curl --location '${curl.url}'`];
+  if (curl.method && curl.method !== 'GET') parts.push(`  --request ${curl.method}`);
+  for (const h of (curl.reqHeaders || [])) {
+    if (h.enabled && h.key.trim()) parts.push(`  --header '${h.key}: ${h.value}'`);
+  }
+  if (curl.bodyContent) {
+    const escaped = curl.bodyContent.replace(/'/g, "'\\''");
+    parts.push(`  --data-raw '${escaped}'`);
+  }
+  return parts.join(' \\\n');
+};
+
 function TokenGenerator({ onScanFromCurl }) {
-  const makeCurl = (n) => ({ id: n, label: `Curl ${n}`, input: '', result: null, error: '', loading: false, timestamp: null });
+  const makeHeader = () => ({ id: Date.now() + Math.random(), key: '', value: '', enabled: true });
+  const makeCurl = (n) => ({
+    id: n, label: `Req ${n}`,
+    method: 'GET', url: '',
+    reqHeaders: [makeHeader()], bodyType: 'none', bodyContent: '',
+    rawCurl: '', importedFromCurl: false, liveParseResult: null, importName: '', parseError: '',
+    result: null, error: '', loading: false, timestamp: null,
+  });
 
   const getNextNum = (list) => {
     if (!list.length) return 1;
@@ -1588,11 +2130,30 @@ function TokenGenerator({ onScanFromCurl }) {
 
   const [curls, setCurls] = useState([makeCurl(1)]);
   const [activeCurlTab, setActiveCurlTab] = useState(1);
-  const [curlUseAI, setCurlUseAI] = useState(true);
   const [copiedField, setCopiedField] = useState('');
   const [executingAll, setExecutingAll] = useState(false);
   const [responseTab, setResponseTab] = useState('body');
   const [requestTab, setRequestTab] = useState('curl');
+  const [selectedTests, setSelectedTests] = useState(DEFAULT_SELECTED_TESTS);
+  const [testCorsMode, setTestCorsMode] = useState('');
+  const [testOriginUrl, setTestOriginUrl] = useState('');
+  const [scanning, setScanning] = useState(false);
+  const [showScanDropdown, setShowScanDropdown] = useState(false);
+  const scanDropdownRef = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (scanDropdownRef.current && !scanDropdownRef.current.contains(e.target)) {
+        const portalEl = document.querySelector('.pm-scan-dropdown');
+        if (portalEl && portalEl.contains(e.target)) return;
+        setShowScanDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const toggleTest = (val) => setSelectedTests((prev) => prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]);
 
   const copyToClipboard = (text, field) => {
     navigator.clipboard.writeText(text).then(() => {
@@ -1629,14 +2190,63 @@ function TokenGenerator({ onScanFromCurl }) {
   };
 
   const clearCurl = (id) => {
-    updateCurl(id, { input: '', result: null, error: '', loading: false, timestamp: null });
+    updateCurl(id, {
+      method: 'GET', url: '', reqHeaders: [makeHeader()], bodyType: 'none', bodyContent: '',
+      rawCurl: '', importedFromCurl: false, liveParseResult: null, importName: '', parseError: '',
+      result: null, error: '', loading: false, timestamp: null,
+    });
+  };
+
+  const getCurlToSend = (curl) => {
+    if (curl.importedFromCurl && curl.rawCurl.trim()) return curl.rawCurl.trim();
+    if (curl.url.trim()) return buildCurlCommand(curl);
+    return curl.rawCurl.trim();
+  };
+
+  const handleImportCurl = (id) => {
+    const curl = curls.find((c) => c.id === id);
+    if (!curl?.liveParseResult?.method) return;
+    const p = curl.liveParseResult;
+    updateCurl(id, {
+      method: p.method, url: p.url,
+      reqHeaders: p.reqHeaders.length ? p.reqHeaders : [makeHeader()],
+      bodyType: p.bodyType, bodyContent: p.bodyContent,
+      importedFromCurl: true, liveParseResult: null, importName: '',
+    });
+    setRequestTab('headers');
+  };
+
+  const detachFromRawCurl = (id) => {
+    updateCurl(id, { rawCurl: '', importedFromCurl: false, liveParseResult: null });
+  };
+
+  // Inline edits keep the curl text as the verbatim command that gets sent;
+  // the parsed fields are refreshed so the Headers/Body tabs stay in sync.
+  const applyInlineCurlEdit = (id, raw) => {
+    const curl = curls.find((c) => c.id === id);
+    if (!curl) return 'Request not found.';
+    const p = parseCurlCommand(raw);
+    if (p.error) return p.error;
+    if (!p.url) return 'Could not find a URL in this curl command.';
+    if (curl.importedFromCurl) {
+      updateCurl(id, {
+        rawCurl: raw,
+        method: p.method, url: p.url,
+        reqHeaders: p.reqHeaders.length ? p.reqHeaders : [makeHeader()],
+        bodyType: p.bodyType, bodyContent: p.bodyContent,
+        parseError: '',
+      });
+    } else {
+      updateCurl(id, { rawCurl: raw, liveParseResult: p, parseError: '' });
+    }
+    return null;
   };
 
   const executeSingle = async (id) => {
     const curl = curls.find((c) => c.id === id);
     if (!curl) return;
-    const trimmed = curl.input.trim();
-    if (!trimmed) { updateCurl(id, { error: 'Please paste a curl command.' }); return; }
+    const trimmed = getCurlToSend(curl);
+    if (!trimmed) { updateCurl(id, { error: 'Enter a URL or import a curl command first.' }); return; }
     updateCurl(id, { error: '', result: null, loading: true, timestamp: null });
     const start = performance.now();
     try {
@@ -1659,7 +2269,7 @@ function TokenGenerator({ onScanFromCurl }) {
   };
 
   const executeAll = async () => {
-    const toExecute = curls.filter((c) => c.input.trim());
+    const toExecute = curls.filter((c) => getCurlToSend(c));
     if (!toExecute.length) return;
     setExecutingAll(true);
     toExecute.forEach((c) => updateCurl(c.id, { error: '', result: null, loading: true, timestamp: null }));
@@ -1668,7 +2278,7 @@ function TokenGenerator({ onScanFromCurl }) {
   };
 
   const executeChain = async () => {
-    const toExecute = curls.filter((c) => c.input.trim());
+    const toExecute = curls.filter((c) => getCurlToSend(c));
     if (!toExecute.length) return;
     setExecutingAll(true);
     toExecute.forEach((c) => updateCurl(c.id, { error: '', result: null, loading: true, timestamp: null }));
@@ -1678,7 +2288,7 @@ function TokenGenerator({ onScanFromCurl }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          curls: toExecute.map((c) => ({ id: c.id, curlCommand: c.input.trim() })),
+          curls: toExecute.map((c) => ({ id: c.id, curlCommand: getCurlToSend(c) })),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1709,7 +2319,7 @@ function TokenGenerator({ onScanFromCurl }) {
     if (curl.loading) return 'loading';
     if (curl.error) return 'error';
     if (curl.result) return 'success';
-    if (curl.input.trim()) return 'has-input';
+    if (getCurlToSend(curl)) return 'has-input';
     return 'empty';
   };
 
@@ -1736,7 +2346,7 @@ function TokenGenerator({ onScanFromCurl }) {
   const autoInjections = active.result?._autoInjections || [];
   const sseEvents = resp?.sseEvents || [];
   const anyLoading = curls.some((c) => c.loading);
-  const nonEmptyCount = curls.filter((c) => c.input.trim()).length;
+  const nonEmptyCount = curls.filter((c) => getCurlToSend(c)).length;
 
   return (
     <div className="pm-wrapper">
@@ -1804,16 +2414,24 @@ function TokenGenerator({ onScanFromCurl }) {
           )}
         </div>
 
-        {/* URL bar */}
+        {/* URL bar — Postman-like method selector + editable URL */}
         <div className="pm-url-bar">
-          {req ? (
-            <span className={`pm-url-method pm-method-${req.method.toLowerCase()}`}>{req.method}</span>
-          ) : (
-            <span className="pm-url-method">CURL</span>
-          )}
-          <div className="pm-url-input">
-            {req ? req.url : (active.input.trim() ? active.input.trim().substring(0, 120) : 'Paste a curl command below...')}
-          </div>
+          <select
+            className={`pm-method-select pm-method-${active.method.toLowerCase()}`}
+            value={active.method}
+            onChange={(e) => updateCurl(active.id, { method: e.target.value, importedFromCurl: false })}
+          >
+            {['GET','POST','PUT','PATCH','DELETE','HEAD','OPTIONS'].map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            className="pm-url-input-field"
+            value={active.url}
+            onChange={(e) => updateCurl(active.id, { url: e.target.value, importedFromCurl: false })}
+            placeholder="https://api.example.com/endpoint"
+          />
           <button
             type="button"
             className="pm-send-btn"
@@ -1824,29 +2442,209 @@ function TokenGenerator({ onScanFromCurl }) {
           </button>
         </div>
 
-        {/* ── Request area (top half) ── */}
+        {/* ── Request area ── */}
         <div className="pm-request-section">
           <div className="pm-section-tabs">
             <button type="button" className={`pm-section-tab${requestTab === 'curl' ? ' active' : ''}`} onClick={() => setRequestTab('curl')}>
-              Curl Input
+              Import cURL
+            </button>
+            <button type="button" className={`pm-section-tab${requestTab === 'headers' ? ' active' : ''}`} onClick={() => setRequestTab('headers')}>
+              Headers {active.reqHeaders.filter((h) => h.enabled && h.key.trim()).length > 0 && `(${active.reqHeaders.filter((h) => h.enabled && h.key.trim()).length})`}
+            </button>
+            <button type="button" className={`pm-section-tab${requestTab === 'body' ? ' active' : ''}`} onClick={() => setRequestTab('body')}>
+              Body {active.bodyContent && active.bodyType !== 'none' ? `· ${active.bodyType}` : ''}
+            </button>
+            <button type="button" className={`pm-section-tab${requestTab === 'tests' ? ' active' : ''}`} onClick={() => setRequestTab('tests')}>
+              Security Tests
             </button>
             {req && Object.keys(req.headers).length > 0 && (
               <button type="button" className={`pm-section-tab${requestTab === 'req-headers' ? ' active' : ''}`} onClick={() => setRequestTab('req-headers')}>
-                Request Headers ({Object.keys(req.headers).length})
+                Sent Headers ({Object.keys(req.headers).length})
               </button>
             )}
             <div className="pm-section-tab-spacer" />
             <button type="button" className="pm-clear-btn" onClick={() => { clearCurl(active.id); setRequestTab('curl'); }}>Clear</button>
           </div>
-          {requestTab === 'curl' && (
-            <textarea
-              className="pm-curl-textarea"
-              value={active.input}
-              onChange={(e) => updateCurl(active.id, { input: e.target.value })}
-              placeholder={`curl --location 'https://api.example.com/session' \\\n--header 'Content-Type: application/json' \\\n--data '{"username":"demo","password":"demo123"}'`}
-              rows={6}
-            />
+
+          {/* Import cURL tab */}
+          {requestTab === 'curl' && !active.importedFromCurl && (
+            <div className="pm-import-area">
+              {active.liveParseResult?.method ? (
+                <div className="pm-import-card">
+                  <div className="pm-import-name-row">
+                    <label>Request name</label>
+                    <input
+                      className="pm-import-name-input"
+                      value={active.importName || active.liveParseResult.url}
+                      onChange={(e) => updateCurl(active.id, { importName: e.target.value })}
+                      placeholder="Request name"
+                    />
+                  </div>
+                  <CurlHighlight raw={active.rawCurl} onChange={(next) => applyInlineCurlEdit(active.id, next)} />
+                  <div className="pm-import-summary">
+                    <span className={`pm-import-method-pill pm-method-${active.liveParseResult.method.toLowerCase()}`}>{active.liveParseResult.method}</span>
+                    {active.liveParseResult.reqHeaders.length > 0 && <span className="pm-import-pill">{active.liveParseResult.reqHeaders.length} header{active.liveParseResult.reqHeaders.length !== 1 ? 's' : ''}</span>}
+                    {active.liveParseResult.bodyType !== 'none' && <span className="pm-import-pill">Body · {active.liveParseResult.bodyType}</span>}
+                  </div>
+                  <div className="pm-import-card-footer">
+                    <button type="button" className="pm-send-btn" onClick={() => handleImportCurl(active.id)}>Import into request →</button>
+                    <button type="button" className="pm-clear-btn" onClick={() => updateCurl(active.id, { rawCurl: '', liveParseResult: null, parseError: '' })}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {active.parseError && (
+                    <div className="pm-import-error-banner">
+                      <span className="pm-import-error-icon">⚠</span>
+                      <span className="pm-import-error-msg">{active.parseError}</span>
+                    </div>
+                  )}
+                  <textarea
+                    className={`pm-curl-textarea${active.parseError ? ' pm-curl-textarea--error' : ''}`}
+                    value={active.rawCurl}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (!raw.trim()) {
+                        updateCurl(active.id, { rawCurl: raw, liveParseResult: null, parseError: '' });
+                        return;
+                      }
+                      const parsed = parseCurlCommand(raw);
+                      if (parsed.error) {
+                        updateCurl(active.id, { rawCurl: raw, liveParseResult: null, parseError: parsed.error });
+                      } else {
+                        updateCurl(active.id, { rawCurl: raw, liveParseResult: parsed, parseError: '' });
+                      }
+                    }}
+                    placeholder={`curl --location 'https://api.example.com/session' \\\n--header 'Content-Type: application/json' \\\n--data '{"username":"demo","password":"demo123"}'`}
+                    rows={7}
+                  />
+                </>
+              )}
+            </div>
           )}
+
+          {/* Imported & locked state */}
+          {requestTab === 'curl' && active.importedFromCurl && (
+            <div className="pm-imported-locked">
+              <div className="pm-imported-locked-badge">✓ Original curl imported — sending verbatim</div>
+              <CurlHighlight raw={active.rawCurl} onChange={(next) => applyInlineCurlEdit(active.id, next)} />
+              <div className="pm-imported-locked-note">
+                <button type="button" className="pm-clear-btn" onClick={() => detachFromRawCurl(active.id)}>Detach &amp; use fields</button>
+                <span className="pm-imported-locked-hint">Or switch to editing method/URL/headers as separate fields.</span>
+              </div>
+            </div>
+          )}
+
+          {/* Headers editor */}
+          {requestTab === 'headers' && (
+            <div className="pm-headers-editor">
+              <table className="pm-headers-editor-table">
+                <thead><tr><th style={{width:'2rem'}} /><th>Key</th><th>Value</th><th style={{width:'2rem'}} /></tr></thead>
+                <tbody>
+                  {active.reqHeaders.map((h) => (
+                    <tr key={h.id} className={h.enabled ? '' : 'pm-hdr-disabled'}>
+                      <td><input type="checkbox" checked={h.enabled} onChange={() => updateCurl(active.id, { reqHeaders: active.reqHeaders.map((r) => r.id === h.id ? { ...r, enabled: !r.enabled } : r) })} /></td>
+                      <td><input className="pm-hdr-input" value={h.key} onChange={(e) => updateCurl(active.id, { reqHeaders: active.reqHeaders.map((r) => r.id === h.id ? { ...r, key: e.target.value } : r), importedFromCurl: false })} placeholder="Header name" /></td>
+                      <td><input className="pm-hdr-input" value={h.value} onChange={(e) => updateCurl(active.id, { reqHeaders: active.reqHeaders.map((r) => r.id === h.id ? { ...r, value: e.target.value } : r), importedFromCurl: false })} placeholder="Value" /></td>
+                      <td><button type="button" className="pm-hdr-del" onClick={() => updateCurl(active.id, { reqHeaders: active.reqHeaders.filter((r) => r.id !== h.id) || [makeHeader()] })} title="Remove"><X size={12} /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button type="button" className="pm-add-header-btn" onClick={() => updateCurl(active.id, { reqHeaders: [...active.reqHeaders, makeHeader()] })}><Plus size={13} /> Add Header</button>
+            </div>
+          )}
+
+          {/* Body editor */}
+          {requestTab === 'body' && (
+            <div className="pm-body-editor">
+              <div className="pm-body-type-bar">
+                {['none','json','raw','form'].map((t) => (
+                  <button key={t} type="button" className={`pm-body-type-btn${active.bodyType === t ? ' active' : ''}`} onClick={() => updateCurl(active.id, { bodyType: t, importedFromCurl: false })}>{t === 'none' ? 'None' : t === 'json' ? 'JSON' : t === 'raw' ? 'Raw' : 'Form Data'}</button>
+                ))}
+              </div>
+              {active.bodyType !== 'none' && (
+                <textarea
+                  className="pm-curl-textarea"
+                  rows={6}
+                  value={active.bodyContent}
+                  onChange={(e) => updateCurl(active.id, { bodyContent: e.target.value, importedFromCurl: false })}
+                  placeholder={active.bodyType === 'json' ? '{\n  "key": "value"\n}' : active.bodyType === 'form' ? 'key=value&another=value' : 'Raw body content'}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Security Tests tab */}
+          {requestTab === 'tests' && (
+            <div className="pm-tests-panel">
+              <div className="pm-tests-header">
+                <span className="pm-tests-title">Security Tests</span>
+                <div className="pm-tests-quick">
+                  <button type="button" className="pm-clear-btn" onClick={() => setSelectedTests(DEFAULT_SELECTED_TESTS)}>All</button>
+                  <button type="button" className="pm-clear-btn" onClick={() => setSelectedTests([])}>None</button>
+                </div>
+              </div>
+              <div className="pm-tests-grid">
+                {TESTING_METHODS.map((m) => {
+                  const icons = { 'http header analysis': '🛡', 'SSL / TLS analysis': '🔒', 'Server version Disclosure': '🖥', 'cors': '🌐', 'Improper Error Handling': '⚠', 'URL Tampering Analysis': '🔗' };
+                  return (
+                    <div key={m.id} className={`pm-test-card${selectedTests.includes(m.value) ? ' selected' : ''}`} onClick={() => toggleTest(m.value)}>
+                      <span className="pm-test-card-icon">{icons[m.value] || '🔍'}</span>
+                      <span className="pm-test-card-label">{m.label.split(' / ')[0]}</span>
+                      <input type="checkbox" checked={selectedTests.includes(m.value)} onChange={() => {}} />
+                    </div>
+                  );
+                })}
+              </div>
+              {selectedTests.includes('cors') && (
+                <div className="pm-tests-cors">
+                  <span className="pm-tests-cors-label">CORS Mode</span>
+                  <div className="pm-tests-cors-opts">
+                    <label className={`pm-cors-opt${testCorsMode === 'passive' ? ' selected' : ''}`}>
+                      <input type="radio" name="testCorsMode-tab" value="passive" checked={testCorsMode === 'passive'} onChange={() => setTestCorsMode('passive')} />
+                      Passive <small>(no origin sent)</small>
+                    </label>
+                    <label className={`pm-cors-opt${testCorsMode === 'active' ? ' selected' : ''}`}>
+                      <input type="radio" name="testCorsMode-tab" value="active" checked={testCorsMode === 'active'} onChange={() => setTestCorsMode('active')} />
+                      Active <small>(custom origin)</small>
+                    </label>
+                  </div>
+                  {testCorsMode === 'active' && (
+                    <input
+                      className="pm-hdr-input"
+                      style={{width:'100%', marginTop:'0.25rem'}}
+                      value={testOriginUrl}
+                      onChange={(e) => setTestOriginUrl(e.target.value)}
+                      placeholder="https://your-origin.com"
+                    />
+                  )}
+                </div>
+              )}
+              {active.url && (
+                <button
+                  type="button"
+                  className={`pm-tests-scan-btn${scanning ? ' loading' : ''}`}
+                  disabled={scanning || !selectedTests.length || (selectedTests.includes('cors') && !testCorsMode)}
+                  onClick={async () => {
+                    if (!onScanFromCurl) return;
+                    setScanning(true);
+                    await onScanFromCurl(
+                      active.url, active.result?.request?.headers, active.method, active.bodyContent,
+                      true, selectedTests,
+                      selectedTests.includes('cors') ? testCorsMode : undefined,
+                      testCorsMode === 'active' ? testOriginUrl : undefined,
+                    );
+                    setScanning(false);
+                  }}
+                >
+                  {scanning ? <><Loader2 size={13} className="spin-icon" /> Scanning…</> : <><Shield size={13} /> Run Security Scan ({selectedTests.length})</>}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Sent request headers (read-only) */}
           {requestTab === 'req-headers' && req && (
             <div className="pm-headers-panel pm-req-headers-panel">
               <table className="pm-headers-table">
@@ -1917,18 +2715,82 @@ function TokenGenerator({ onScanFromCurl }) {
                 )}
                 {onScanFromCurl && req?.url && (
                   <>
-                    <button
-                      type="button"
-                      className="pm-meta-item pm-scan-api-btn"
-                      title="Run security scanner on this API using the same URL, method, headers and body (e.g. token from chain)"
-                      onClick={() => onScanFromCurl(req.url, req.headers, req.method, req.body, curlUseAI)}
-                    >
-                      Scan this API
-                    </button>
-                    <label className="pm-meta-item pm-ai-toggle" title={curlUseAI ? 'AI analysis will run (uses API quota)' : 'No AI analysis — saves API quota'}>
-                      <input type="checkbox" checked={curlUseAI} onChange={(e) => { e.stopPropagation(); setCurlUseAI((v) => !v); }} />
-                      AI {curlUseAI ? 'ON' : 'OFF'}
-                    </label>
+                    <div className="pm-scan-dropdown-wrap" ref={scanDropdownRef}>
+                      <button
+                        type="button"
+                        className={`pm-meta-item pm-scan-api-btn${showScanDropdown ? ' active' : ''}`}
+                        onClick={() => setShowScanDropdown((v) => !v)}
+                      >
+                        <Shield size={13} /> Scan this API ▾
+                      </button>
+                      {showScanDropdown && (
+                        <ScanDropdownPortal anchorRef={scanDropdownRef}>
+                          <div className="pm-scan-dd-header">
+                            <span>Choose tests to run</span>
+                            <label className="pm-scan-dd-toggle" onClick={(e) => {
+                              e.preventDefault();
+                              const allValues = TESTING_METHODS.map((m) => m.value);
+                              setSelectedTests((prev) => prev.length === allValues.length ? [] : allValues);
+                            }}>
+                              <input type="checkbox" checked={selectedTests.length === TESTING_METHODS.length} readOnly />
+                              {selectedTests.length === TESTING_METHODS.length ? 'Deselect All' : 'Select All'}
+                            </label>
+                          </div>
+                          <div className="pm-scan-dd-list">
+                            {TESTING_METHODS.map((m) => (
+                              <label key={m.id} className="pm-scan-dd-item">
+                                <input type="checkbox" checked={selectedTests.includes(m.value)} onChange={() => toggleTest(m.value)} />
+                                {m.label.split(' / ')[0]}
+                              </label>
+                            ))}
+                          </div>
+                          {selectedTests.includes('cors') && (
+                            <div className="pm-scan-dd-cors">
+                              <span className="pm-scan-dd-cors-label">CORS Mode</span>
+                              <div className="pm-tests-cors-opts">
+                                <label className={`pm-cors-opt${testCorsMode === 'passive' ? ' selected' : ''}`}>
+                                  <input type="radio" name="testCorsMode-dd" value="passive" checked={testCorsMode === 'passive'} onChange={() => setTestCorsMode('passive')} />
+                                  Passive
+                                </label>
+                                <label className={`pm-cors-opt${testCorsMode === 'active' ? ' selected' : ''}`}>
+                                  <input type="radio" name="testCorsMode-dd" value="active" checked={testCorsMode === 'active'} onChange={() => setTestCorsMode('active')} />
+                                  Active
+                                </label>
+                              </div>
+                              {testCorsMode === 'active' && (
+                                <input
+                                  className="pm-hdr-input"
+                                  style={{width:'100%', marginTop:'0.35rem'}}
+                                  value={testOriginUrl}
+                                  onChange={(e) => setTestOriginUrl(e.target.value)}
+                                  placeholder="https://your-origin.com"
+                                />
+                              )}
+                            </div>
+                          )}
+                          <div className="pm-scan-dd-footer">
+                            <button
+                              type="button"
+                              className={`pm-tests-scan-btn${scanning ? ' loading' : ''}`}
+                              disabled={scanning || !selectedTests.length || (selectedTests.includes('cors') && !testCorsMode)}
+                              onClick={async () => {
+                                setShowScanDropdown(false);
+                                setScanning(true);
+                                await onScanFromCurl(
+                                  req.url, req.headers, req.method, req.body,
+                                  true, selectedTests,
+                                  selectedTests.includes('cors') ? testCorsMode : undefined,
+                                  testCorsMode === 'active' ? testOriginUrl : undefined,
+                                );
+                                setScanning(false);
+                              }}
+                            >
+                              {scanning ? <><Loader2 size={13} className="spin-icon" /> Scanning…</> : <><Shield size={13} /> Run ({selectedTests.length})</>}
+                            </button>
+                          </div>
+                        </ScanDropdownPortal>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -2058,13 +2920,50 @@ function TokenGenerator({ onScanFromCurl }) {
   );
 }
 
-function HistoryPage({ history, onRestore, onRemove, onClear, onDownload }) {
+function HistoryPage({ history, onRestore, onRemove, onClear }) {
+  const [downloading, setDownloading] = useState({});
+
   const gradeColor = (g) => ({ A: '#22c55e', B: '#84cc16', C: '#eab308', D: '#f97316', F: '#ef4444' }[g] || '#a3a3a3');
   const scoreBar = (s) => s == null ? null : (
     <div className="hist-score-bar-wrap">
       <div className="hist-score-bar" style={{ width: `${s}%`, background: s >= 80 ? '#22c55e' : s >= 60 ? '#eab308' : '#ef4444' }} />
     </div>
   );
+
+  const handleDownload = async (entry) => {
+    setDownloading((prev) => ({ ...prev, [entry.id]: true }));
+    try {
+      const res = await fetch('/api/download-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ report: entry.result }),
+      });
+      if (!res.ok) throw new Error('Failed to generate report');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const safeDomain = (entry.url || 'report').replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9.-]/g, '_').replace(/_+/g, '_').slice(0, 60);
+      const r = entry.result?.batch ? entry.result.results?.[0] : entry.result;
+      const parts = [];
+      if (r?.headersReport) parts.push('Header Analysis');
+      if (r?.sslReport) parts.push('SSL-TLS');
+      if (r?.serverReport) parts.push('Server Version Disclosure');
+      if (r?.corsReport) parts.push('CORS');
+      if (r?.errorHandlingReport) parts.push('Error Handling');
+      if (r?.urlTamperingReport) parts.push('URL Tampering');
+      const prefix = parts.length ? parts.join(' + ') : 'Security Report';
+      a.href = url;
+      a.download = `${prefix} - ${safeDomain}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err.message || 'Download failed. Make sure the backend is running.');
+    } finally {
+      setDownloading((prev) => ({ ...prev, [entry.id]: false }));
+    }
+  };
 
   return (
     <div className="history-page">
@@ -2120,10 +3019,11 @@ function HistoryPage({ history, onRestore, onRemove, onClear, onDownload }) {
                   </button>
                   <button
                     className="hist-btn hist-btn-download"
-                    onClick={() => onDownload(entry)}
-                    title="Download report with exact styling"
+                    onClick={() => handleDownload(entry)}
+                    disabled={downloading[entry.id]}
+                    title="Download HTML security report"
                   >
-                    ⬇ Download
+                    {downloading[entry.id] ? '…' : '⬇ Download'}
                   </button>
                   <button className="hist-btn hist-btn-del" onClick={() => onRemove(entry.id)} title="Remove from history">
                     ✕
@@ -2139,42 +3039,8 @@ function HistoryPage({ history, onRestore, onRemove, onClear, onDownload }) {
 }
 
 function SettingsPage({ theme, toggleTheme }) {
-  const [usage, setUsage] = useState(null);
-  const [usageLoading, setUsageLoading] = useState(false);
-  const [usageError, setUsageError] = useState('');
-
-  const fetchUsage = async () => {
-    setUsageLoading(true);
-    setUsageError('');
-    try {
-      const res = await fetch('/api/openrouter-usage');
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.enabled) throw new Error(data.error || 'Failed to fetch usage');
-      setUsage(data);
-    } catch (err) {
-      setUsageError(err.message || 'Could not fetch OpenRouter usage.');
-    } finally {
-      setUsageLoading(false);
-    }
-  };
-
-  useEffect(() => { fetchUsage(); }, []);
-
-  const fmt = (val) => (val == null ? '—' : `$${Number(val).toFixed(6)}`);
-  const fmtDate = (val) => {
-    if (!val) return '—';
-    try { return new Date(val).toLocaleString(); } catch (_) { return val; }
-  };
-
-  // Percentage used if there's a limit
-  const limitPct = usage?.limit && usage?.limitRemaining != null
-    ? Math.min(100, Math.round(((usage.limit - usage.limitRemaining) / usage.limit) * 100))
-    : null;
-  const barColor = limitPct == null ? '#6366f1' : limitPct >= 90 ? '#ef4444' : limitPct >= 70 ? '#f97316' : '#22c55e';
-
   return (
     <div className="settings-page">
-      {/* Theme */}
       <div className="form-card settings-card">
         <div className="settings-card-header">
           <span className="settings-card-icon">🎨</span>
@@ -2187,145 +3053,104 @@ function SettingsPage({ theme, toggleTheme }) {
           {theme === 'dark' ? '☀️ Switch to Light' : '🌙 Switch to Dark'}
         </button>
       </div>
-
-      {/* OpenRouter AI Usage */}
-      <div className="form-card settings-card">
-        <div className="settings-card-header">
-          <span className="settings-card-icon">🤖</span>
-          <div>
-            <div className="settings-card-title">OpenRouter AI Usage</div>
-            <div className="settings-card-subtitle">Live usage and limits for your API key</div>
-          </div>
-          <button className="or-refresh-btn" onClick={fetchUsage} disabled={usageLoading} title="Refresh">
-            {usageLoading ? '⟳' : '↻'}
-          </button>
-        </div>
-
-        {usageError && (
-          <div className="or-error">⚠️ {usageError}</div>
-        )}
-
-        {usageLoading && !usage && (
-          <div className="or-loading">Loading usage data…</div>
-        )}
-
-        {usage && (
-          <div className="or-usage-body">
-            {/* Key info row */}
-            <div className="or-info-row">
-              <div className="or-info-item">
-                <span className="or-info-label">Key</span>
-                <code className="or-info-value">{usage.label}</code>
-              </div>
-              <div className="or-info-item">
-                <span className="or-info-label">Model</span>
-                <code className="or-info-value">{usage.model}</code>
-              </div>
-              <div className="or-info-item">
-                <span className="or-info-label">Tier</span>
-                <span className={`or-tier-badge ${usage.isFreeTier ? 'or-tier-free' : 'or-tier-paid'}`}>
-                  {usage.isFreeTier ? 'Free Tier' : 'Paid'}
-                </span>
-              </div>
-              {usage.expiresAt && (
-                <div className="or-info-item">
-                  <span className="or-info-label">Expires</span>
-                  <span className="or-info-value">{fmtDate(usage.expiresAt)}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Usage metrics */}
-            <div className="or-metrics-grid">
-              <div className="or-metric-card or-metric-total">
-                <div className="or-metric-num">{fmt(usage.usage)}</div>
-                <div className="or-metric-label">Total Spent</div>
-              </div>
-              <div className="or-metric-card">
-                <div className="or-metric-num">{fmt(usage.usageDaily)}</div>
-                <div className="or-metric-label">Today</div>
-              </div>
-              <div className="or-metric-card">
-                <div className="or-metric-num">{fmt(usage.usageWeekly)}</div>
-                <div className="or-metric-label">This Week</div>
-              </div>
-              <div className="or-metric-card">
-                <div className="or-metric-num">{fmt(usage.usageMonthly)}</div>
-                <div className="or-metric-label">This Month</div>
-              </div>
-            </div>
-
-            {/* Limit bar */}
-            {usage.limit != null ? (
-              <div className="or-limit-section">
-                <div className="or-limit-header">
-                  <span className="or-limit-label">Credit Limit Usage</span>
-                  <span className="or-limit-value">
-                    {fmt(usage.limit - (usage.limitRemaining ?? 0))} used of {fmt(usage.limit)}
-                    {usage.limitRemaining != null && (
-                      <span className="or-limit-remaining"> · {fmt(usage.limitRemaining)} remaining</span>
-                    )}
-                  </span>
-                </div>
-                <div className="or-limit-bar-bg">
-                  <div
-                    className="or-limit-bar-fill"
-                    style={{ width: `${limitPct}%`, background: barColor }}
-                  />
-                </div>
-                <div className="or-limit-pct" style={{ color: barColor }}>{limitPct}% used</div>
-                {limitPct >= 90 && (
-                  <div className="or-limit-warn">⚠️ You are near your credit limit. Top up or upgrade your plan.</div>
-                )}
-                {usage.limitReset && (
-                  <div className="or-limit-reset">Resets: {fmtDate(usage.limitReset)}</div>
-                )}
-              </div>
-            ) : (
-              <div className="or-no-limit">
-                <span className="or-no-limit-icon">♾️</span>
-                <span>No credit limit set on this key — usage is pay-as-you-go or rate-limited by tier.</span>
-              </div>
-            )}
-
-            {usage.isFreeTier && (
-              <div className="or-free-note">
-                ℹ️ Free tier keys can only access free models on OpenRouter. Some models may be unavailable.
-                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer"> Manage keys →</a>
-              </div>
-            )}
-
-            <div className="or-last-updated">Last updated: {new Date().toLocaleTimeString()}</div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
 
 
+function ScanProgressCard({ emailSending }) {
+  const SCAN_STEPS = [
+    { icon: ScanSearch,   label: 'Reaching target',          sub: 'Resolving DNS and connecting…' },
+    { icon: Send,         label: 'Sending request',          sub: 'GET / OPTIONS probes in flight…' },
+    { icon: Shield,       label: 'Analyzing headers & TLS',  sub: 'Inspecting security headers and certificate…' },
+    { icon: FileSearch,   label: 'Evaluating rules',         sub: 'Running 50+ security checks…' },
+    { icon: CheckCircle2, label: 'Compiling report',         sub: 'Scoring findings and building output…' },
+  ];
+  const STEP_DELAYS = [900, 2300, 5500, 10500];
+  const STEP_PCTS = [15, 35, 55, 78, 92];
+
+  const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    setStep(0);
+    const timers = STEP_DELAYS.map((delay, idx) =>
+      setTimeout(() => setStep(idx + 1), delay)
+    );
+    return () => timers.forEach(clearTimeout);
+  }, []);
+
+  const pct = STEP_PCTS[step] ?? STEP_PCTS[STEP_PCTS.length - 1];
+
+  return (
+    <div className="scan-progress-card">
+      <div className="scan-progress-head">
+        <Loader2 size={15} className="scan-spin" aria-hidden />
+        <span className="scan-progress-title">
+          {emailSending ? 'Scanning & sending report…' : 'Running security scan…'}
+        </span>
+        <span className="scan-progress-pct">{pct}%</span>
+      </div>
+
+      <div className="scan-progress-bar">
+        <div className="scan-progress-bar-fill" style={{ width: `${pct}%` }} />
+      </div>
+
+      <ol className="scan-progress-steps">
+        {SCAN_STEPS.map((s, i) => {
+          const Icon = s.icon;
+          const done = i < step;
+          const active = i === step;
+          return (
+            <li
+              key={i}
+              className={`scan-step ${done ? 'is-done' : active ? 'is-active' : 'is-pending'}`}
+            >
+              <div className="scan-step-dot">
+                {done
+                  ? <CheckCircle2 size={14} aria-hidden />
+                  : active
+                    ? <Loader2 size={14} className="scan-spin" aria-hidden />
+                    : <Icon size={13} aria-hidden />}
+              </div>
+              <div className="scan-step-text">
+                <p className="scan-step-label">{s.label}</p>
+                <p className="scan-step-sub">{s.sub}</p>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+
+      {emailSending && (
+        <div className="email-sending-badge scan-progress-badge">
+          <span className="email-sending-dot" /> Sending email to recipients…
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dashboard({ user, onLogout }) {
   const { theme, toggleTheme } = useTheme();
   const { history, addEntry, removeEntry, clearHistory } = useHistory();
-  const [activePage, setActivePage] = useState('scanner');
+  const navigate = useNavigate();
+  const location = useLocation();
+  const activePage = PATH_TO_PAGE[location.pathname] || 'scanner';
+  const setActivePage = (pageId) => navigate(PAGE_TO_PATH[pageId] || '/scanner');
   const [manualUrl, setManualUrl] = useState('');
-  const [recipients, setRecipients] = useState(['']);
-  const [sendReport, setSendReport] = useState(false);
+  const [recipients] = useState(['']);
+  const [sendReport] = useState(false);
   const [selectedMethods, setSelectedMethods] = useState([]);
+  const [scanProfile, setScanProfile] = useState('custom');
   const [corsMode, setCorsMode] = useState('');
   const [originUrl, setOriginUrl] = useState('');
-  const [useAI, setUseAI] = useState(true);
   const [loading, setLoading] = useState(false);
   const [emailSending, setEmailSending] = useState(false);
   const [emailStatus, setEmailStatus] = useState(null);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
-  // Background AI polling state
-  const [aiPolling, setAiPolling] = useState(false); // true while polling background job
   const [activeTab, setActiveTab] = useState(0);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
-  // Used by history download: set to true before loading a result, triggers DOM-capture after render
-  const pendingDownloadRef = useRef(false);
   const saveToHistory = useCallback((data, url, methods) => {
     const firstResult = data?.batch ? (data.results?.[0] || {}) : data;
     const hr = firstResult?.headersReport;
@@ -2342,120 +3167,23 @@ function Dashboard({ user, onLogout }) {
     });
   }, [addEntry]);
 
-  // ── Background LLM polling ──────────────────────────────────────────────────
-  // When the scan returns an aiJobId, poll /api/ai-poll/<id> until the LLM finishes,
-  // then silently upgrade the displayed report with the richer AI result.
-  useEffect(() => {
-    const hr = result?.batch ? result?.results?.[0]?.headersReport : result?.headersReport;
-    const jobId = hr?.aiJobId;
-    if (!jobId) return;
-    setAiPolling(true);
-    let cancelled = false;
-    let pollCount = 0;
-    const MAX_POLLS = 60; // 60 × 4s = 4 minutes max wait
-    const poll = async () => {
-      if (cancelled) return;
-      try {
-        const res = await fetch(`/api/ai-poll/${jobId}`);
-        const data = await res.json().catch(() => ({}));
-        if (data.status === 'done' && data.aiData) {
-          // Upgrade the result with LLM data, clear aiJobId so polling stops
-          setResult((prev) => {
-            if (!prev) return prev;
-            const patchHR = (prevHR) => ({
-              ...prevHR,
-              ...data.aiData,
-              aiJobId: null, // stop future polls
-              aiSource: data.aiData.aiSource || 'llm',
-              aiError: null,
-            });
-            if (prev.batch) {
-              const updatedResults = (prev.results || []).map((r) =>
-                r?.headersReport?.aiJobId === jobId
-                  ? { ...r, headersReport: patchHR(r.headersReport) }
-                  : r
-              );
-              return { ...prev, results: updatedResults };
-            }
-            return { ...prev, headersReport: patchHR(prev.headersReport) };
-          });
-          setAiPolling(false);
-          return; // done
-        }
-        if (data.status === 'failed' || data.status === 'not_found') {
-          setAiPolling(false);
-          return; // keep template result, no upgrade
-        }
-        // still pending — schedule next poll with increasing delay
-        pollCount += 1;
-        if (pollCount >= MAX_POLLS) { setAiPolling(false); return; }
-        const delay = pollCount < 5 ? 4000 : pollCount < 15 ? 6000 : 10000;
-        if (!cancelled) setTimeout(poll, delay);
-      } catch {
-        if (!cancelled) setTimeout(poll, 8000);
-      }
-    };
-    setTimeout(poll, 4000); // first poll after 4 seconds
-    return () => { cancelled = true; setAiPolling(false); };
-  }, [result?.headersReport?.aiJobId, result?.results?.[0]?.headersReport?.aiJobId]);
-
-  // Fires after result state updates — used by history download to trigger DOM capture
-  useEffect(() => {
-    if (!pendingDownloadRef.current) return;
-    pendingDownloadRef.current = false;
-    // Wait two animation frames so the browser paints the new result before we capture
-    const raf = requestAnimationFrame(() => {
-      requestAnimationFrame(async () => {
-        const tabPanel = document.querySelector('.tab-panel');
-        const reportEl = tabPanel?.querySelector('.report-inner') || tabPanel;
-        if (!reportEl) return;
-        try {
-          const cssChunks = [];
-          for (const sheet of Array.from(document.styleSheets)) {
-            try {
-              const rules = sheet.cssRules || sheet.rules;
-              if (rules) { cssChunks.push(Array.from(rules).map(r => r.cssText).join('\n')); continue; }
-            } catch { /**/ }
-            if (sheet.href) {
-              try { const r = await fetch(sheet.href); if (r.ok) cssChunks.push(await r.text()); } catch { /**/ }
-            }
-          }
-          const theme = document.documentElement.getAttribute('data-theme') || 'light';
-          const siteUrlEl = reportEl.querySelector('.site-url');
-          const domain = siteUrlEl?.textContent?.trim().replace(/^[•●\s]+/, '') || 'report';
-          const clone = reportEl.cloneNode(true);
-          clone.querySelectorAll('.ai-upgrade-strip,.ai-rerun-strip,.ai-retry-banner,.copy-btn,.ai-enhancing-banner').forEach(el => el.remove());
-          const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-          const safeFilename = domain.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 60);
-          const html = `<!DOCTYPE html><html lang="en" data-theme="${theme}"><head>
-<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Security Report — ${domain} — ${dateStr}</title>
-<style>*,*::before,*::after{box-sizing:border-box;}html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;}[data-theme="dark"]{background:#0f172a;color:#e2e8f0;}[data-theme="light"]{background:#f1f5f9;color:#1e293b;}.report-wrapper{max-width:960px;margin:32px auto;padding:0 16px 48px;}.report-meta{font-size:.72rem;color:#64748b;margin-bottom:16px;padding:10px 16px;background:rgba(99,102,241,.06);border-radius:8px;border:1px solid rgba(99,102,241,.15);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;}.report-inner{border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.12);}.ai-enhancing-banner,.ai-upgrade-strip,.ai-rerun-strip,.ai-retry-banner{display:none!important;}@media print{body{background:#fff!important;}.report-wrapper{margin:0;padding:0;max-width:100%;}.report-meta{display:none;}}${cssChunks.join('\n')}</style>
-</head><body data-theme="${theme}"><div class="report-wrapper">
-<div class="report-meta"><span>🔒 API Security Report · ${domain}</span><span>Generated ${dateStr} · API Secure Scanner</span></div>
-${clone.outerHTML}</div></body></html>`;
-          const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `security-report-${safeFilename}-${new Date().toISOString().slice(0, 10)}.html`;
-          document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 2000);
-        } catch (err) {
-          alert('Download failed: ' + (err.message || 'Unknown error'));
-        }
-      });
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [result]);
-
   const toggleMethod = (value) => {
     setSelectedMethods((prev) => (prev.includes(value) ? prev.filter((m) => m !== value) : [...prev, value]));
   };
 
-  const addRecipient = () => setRecipients((prev) => [...prev, '']);
-  const setRecipientAt = (i, v) => setRecipients((prev) => prev.map((r, j) => (j === i ? v : r)));
-  const removeRecipient = (i) => setRecipients((prev) => prev.filter((_, j) => j !== i));
+  /* Profiles are presets over the same `selectedMethods` checkboxes the user
+     can tick by hand — they only change which boxes are ticked, never how the
+     scan runs. Ticking a box manually falls back to the "Custom" label. */
+  const applyScanProfile = (id) => {
+    setScanProfile(id);
+    if (id === 'quick') setSelectedMethods(QUICK_SCAN_METHODS);
+    else if (id === 'standard') setSelectedMethods(TESTING_METHODS.map((m) => m.value));
+  };
+
+  const toggleMethodManual = (value) => {
+    setScanProfile('custom');
+    toggleMethod(value);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -2494,7 +3222,6 @@ ${clone.outerHTML}</div></body></html>`;
         origin: corsMode === 'active' ? originUrl.trim() || undefined : undefined,
         corsAnalysisType: corsAnalysisType || undefined,
         recipientEmails: validRecipients.length ? validRecipients.join(', ') : undefined,
-        aiAnalysis: useAI,
       };
       const res = await fetch('/api/scan', {
         method: 'POST',
@@ -2505,7 +3232,7 @@ ${clone.outerHTML}</div></body></html>`;
       if (!res.ok) throw new Error(data.error || res.statusText || `Request failed (${res.status})`);
       // Merge new results into existing if this is an incremental scan
       const merged = existingForUrl && skippedMethods.length > 0 ? mergeResults(existingForUrl, data) : data;
-      setResult(merged);
+      setResult(sanitizeResult(merged));
       setActiveTab(0);
       setSelectedBatchIndex(0);
       saveToHistory(merged, url, selectedMethods);
@@ -2565,138 +3292,45 @@ ${clone.outerHTML}</div></body></html>`;
     }
   };
 
-  const [downloadingReport, setDownloadingReport] = useState(false);
-
   const batchResults = result?.batch ? (result.results || []) : [];
   const safeBatchIndex = batchResults.length ? Math.min(selectedBatchIndex, batchResults.length - 1) : 0;
   const currentResult = result?.batch ? batchResults[safeBatchIndex] : result;
-  const tabs = [];
-  if (currentResult?.headersReport != null) tabs.push({ name: 'Security headers', content: (
-    <HeadersReport
-      r={currentResult.headersReport}
-      aiPolling={aiPolling}
-      onRetryAI={async () => {
-        // Force a fresh LLM scan (bypasses cache) by re-submitting the scan with forceAI flag
-        try {
-          const domain = currentResult.targetDomain || currentResult.url;
-          const evaluated = currentResult.headersReport?.evaluatedHeaders || {};
-          // Invalidate cache and start a new background job via the scan endpoint
-          const res = await fetch('/api/ai-retry', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ domain, evaluatedHeaders: evaluated }),
-          });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || 'AI retry failed');
-          // Patch the job id into our result so the polling effect kicks in
-          const newJobId = data.jobId;
-          if (newJobId) {
-            setResult((prev) => {
-              if (!prev) return prev;
-              const patchHR = (prevHR) => ({ ...prevHR, aiJobId: newJobId, aiSource: 'template' });
-              if (prev.batch) {
-                const results = (prev.results || []).map((r, i) =>
-                  i === safeBatchIndex ? { ...r, headersReport: patchHR(r.headersReport || {}) } : r
-                );
-                return { ...prev, results };
-              }
-              return { ...prev, headersReport: patchHR(prev.headersReport || {}) };
-            });
-            setAiPolling(true);
-          }
-        } catch (err) {
-          setEmailStatus({ type: 'error', message: `AI retry failed: ${err.message}` });
-        }
-      }}
-    />
-  ) });
-  if (currentResult?.corsReport != null) tabs.push({ name: 'CORS', content: <CorsReport r={currentResult.corsReport} /> });
-  if (currentResult?.serverReport != null) tabs.push({ name: 'Server disclosure', content: <ServerReport r={currentResult.serverReport} /> });
-  if (currentResult?.sslReport != null) tabs.push({ name: 'SSL/TLS', content: <SslReport r={currentResult.sslReport} /> });
-  else if (currentResult && selectedMethods.some((m) => /ssl|tls/i.test(m))) tabs.push({ name: 'SSL/TLS', content: <div className="report-inner"><div className="section"><div className="section-content" style={{ color: 'var(--danger)' }}>SSL/TLS report was not returned. Ensure the backend is running and try again.</div></div></div> });
-  if (currentResult?.errorHandlingReport != null) tabs.push({ name: 'Error handling', content: <ErrorHandlingReport r={currentResult.errorHandlingReport} /> });
-  if (currentResult?.urlTamperingReport != null) tabs.push({ name: 'URL tampering', content: <UrlTamperingReport r={currentResult.urlTamperingReport} /> });
+  const scanUrl = currentResult?.url || currentResult?.targetDomain || manualUrl || '';
 
-  // ── Download current report tab as a self-contained HTML file ──────────────
-  // Defined here (after currentResult + tabs) to avoid temporal dead zone crash
-  const downloadCurrentReport = async () => {
-    const tabPanel = document.querySelector('.tab-panel');
-    const reportEl = tabPanel?.querySelector('.report-inner') || tabPanel;
-    if (!reportEl) { alert('No report visible to download.'); return; }
-    setDownloadingReport(true);
+  const downloadSingleReport = async (_reportData, prefix) => {
     try {
-      const cssChunks = [];
-      for (const sheet of Array.from(document.styleSheets)) {
-        try {
-          const rules = sheet.cssRules || sheet.rules;
-          if (rules) { cssChunks.push(Array.from(rules).map(r => r.cssText).join('\n')); continue; }
-        } catch { /* cross-origin */ }
-        if (sheet.href) {
-          try { const res = await fetch(sheet.href); if (res.ok) cssChunks.push(await res.text()); } catch { /* ignore */ }
-        }
-      }
-      const theme = document.documentElement.getAttribute('data-theme') || 'light';
-      const domain = currentResult?.targetDomain || currentResult?.url || 'report';
-      const tabName = tabs[activeTab]?.name || 'security-report';
-      const clone = reportEl.cloneNode(true);
-      clone.querySelectorAll('.ai-upgrade-strip, .ai-rerun-strip, .ai-retry-banner, .copy-btn, .ai-enhancing-banner').forEach(el => el.remove());
-      const safeFilename = `${domain}-${tabName}`.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').slice(0, 60);
-      const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-      const html = `<!DOCTYPE html>
-<html lang="en" data-theme="${theme}">
-<head>
-  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Security Report — ${domain} — ${dateStr}</title>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    [data-theme="dark"] { background: #0f172a; color: #e2e8f0; }
-    [data-theme="light"] { background: #f1f5f9; color: #1e293b; }
-    .report-wrapper { max-width: 960px; margin: 32px auto; padding: 0 16px 48px; }
-    .report-meta { font-size: 0.72rem; color: #64748b; margin-bottom: 16px; padding: 10px 16px; background: rgba(99,102,241,0.06); border-radius: 8px; border: 1px solid rgba(99,102,241,0.15); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-    .report-inner { border-radius: 14px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.12); }
-    .ai-enhancing-banner, .ai-upgrade-strip, .ai-rerun-strip, .ai-retry-banner { display: none !important; }
-    @media print { body { background: #fff !important; } .report-wrapper { margin: 0; padding: 0; max-width: 100%; } .report-meta { display: none; } }
-    ${cssChunks.join('\n')}
-  </style>
-</head>
-<body data-theme="${theme}">
-  <div class="report-wrapper">
-    <div class="report-meta"><span>🔒 API Security Report · ${domain}</span><span>Generated ${dateStr} · API Secure Scanner</span></div>
-    ${clone.outerHTML}
-  </div>
-</body></html>`;
-      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `security-report-${safeFilename}-${new Date().toISOString().slice(0, 10)}.html`;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      const panel = document.querySelector('.tab-panel');
+      if (!panel) { alert('No report visible to download.'); return; }
+      const clone = panel.cloneNode(true);
+      clone.querySelectorAll('button, .copy-btn').forEach(el => el.remove());
+      const safeDomain = (scanUrl || 'report').replace(/^https?:\/\//, '').replace(/[^a-zA-Z0-9.-]/g, '_').replace(/_+/g, '_').slice(0, 60);
+      const html = buildDownloadHTML(clone.innerHTML, `${prefix} - ${safeDomain}`);
+      downloadHTMLFile(html, `${prefix} - ${safeDomain}.html`);
     } catch (err) {
-      alert('Download failed: ' + (err.message || 'Unknown error'));
-    } finally {
-      setDownloadingReport(false);
+      alert(err.message || 'Download failed.');
     }
   };
 
+  const tabs = [];
+  if (currentResult?.headersReport != null) tabs.push({ name: 'Security headers', reportKey: 'headersReport', downloadPrefix: 'Header Analysis', content: (
+    <HeadersReport r={currentResult.headersReport} />
+  ) });
+  if (currentResult?.corsReport != null) tabs.push({ name: 'CORS', reportKey: 'corsReport', downloadPrefix: 'CORS Analysis', content: <CorsReport r={currentResult.corsReport} /> });
+  if (currentResult?.serverReport != null) tabs.push({ name: 'Server disclosure', reportKey: 'serverReport', downloadPrefix: 'Server Version Disclosure', content: <ServerReport r={currentResult.serverReport} /> });
+  if (currentResult?.sslReport != null) tabs.push({ name: 'SSL/TLS', reportKey: 'sslReport', downloadPrefix: 'SSL-TLS Analysis', content: <SslReport r={currentResult.sslReport} /> });
+  else if (currentResult && selectedMethods.some((m) => /ssl|tls/i.test(m))) tabs.push({ name: 'SSL/TLS', content: <div className="report-inner"><div className="section"><div className="section-content" style={{ color: 'var(--danger)' }}>SSL/TLS report was not returned. Ensure the backend is running and try again.</div></div></div> });
+  if (currentResult?.errorHandlingReport != null) tabs.push({ name: 'Error handling', reportKey: 'errorHandlingReport', downloadPrefix: 'Error Handling Analysis', content: <ErrorHandlingReport r={currentResult.errorHandlingReport} /> });
+  if (currentResult?.urlTamperingReport != null) tabs.push({ name: 'URL tampering', reportKey: 'urlTamperingReport', content: <UrlTamperingReport r={currentResult.urlTamperingReport} /> });
+  if (currentResult?.sensitiveDataReport != null) tabs.push({ name: 'PII / Sensitive data', reportKey: 'sensitiveDataReport', downloadPrefix: 'Sensitive Data Exposure', content: <SensitiveDataReport r={currentResult.sensitiveDataReport} /> });
+
   return (
     <div className="app-with-sidebar">
-      <Sidebar user={user} onLogout={onLogout} activePage={activePage} onNavigate={setActivePage} />
+      <Sidebar user={user} onLogout={onLogout} />
       <div className="app-main-content">
       <div className="app">
       {loading && (
         <div className="loading-overlay" aria-live="polite" aria-busy="true">
-          <div className="loading-card">
-            <div className="loading-spinner" aria-hidden />
-            <p className="loading-title">{emailSending ? 'Scanning & Sending Email…' : 'Scanning…'}</p>
-            <p className="loading-hint">{emailSending ? 'Running security checks and sending report to recipients.' : 'This may take 15–60 seconds. Please wait.'}</p>
-            {emailSending && (
-              <div className="email-sending-badge">
-                <span className="email-sending-dot" /> Sending email to recipients…
-              </div>
-            )}
-          </div>
+          <ScanProgressCard emailSending={emailSending} />
         </div>
       )}
       {/* Standalone email sending overlay */}
@@ -2714,20 +3348,48 @@ ${clone.outerHTML}</div></body></html>`;
       )}
       <header className="header">
         <div className="header-left">
-          <div className="header-logo" aria-hidden>⚙</div>
-          <div>
-            <h1>API Secure</h1>
-            <p className="sub">Scan · Analyze · Report</p>
+          <img
+            src="/app-logo.svg"
+            alt="API Secure"
+            className="header-app-logo"
+          />
+          <div className="header-divider" aria-hidden />
+          <div className="header-title-block">
+            <h1>API SECURE</h1>
+            <p className="header-eyebrow">Security Scanner</p>
           </div>
         </div>
         <div className="header-actions">
-          <button type="button" className="theme-toggle" onClick={toggleTheme} title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'} aria-label="Toggle theme">
-            {theme === 'dark' ? '☀️ Light' : '🌙 Dark'}
+          <span className="header-status-pill" title="Backend reachable">
+            <span className="header-status-dot" /> backend ok
+          </span>
+          <button
+            type="button"
+            className="header-icon-btn"
+            onClick={toggleTheme}
+            title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
+            aria-label="Toggle theme"
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          <button type="button" className="header-btn header-btn-settings" title="Settings" aria-label="Settings" onClick={() => setActivePage('settings')}>⚙️</button>
-          <button type="button" className="header-btn" title="Help" aria-label="Help">❓</button>
-          <button type="button" className="header-btn header-logout-mobile" title="Logout" aria-label="Logout" onClick={onLogout}>
-            Logout
+          <button
+            type="button"
+            className="header-icon-btn"
+            title="Settings"
+            aria-label="Settings"
+            onClick={() => setActivePage('settings')}
+          >
+            <Settings size={16} />
+          </button>
+          <AnalysisInfoButton variant="icon" />
+          <button
+            type="button"
+            className="header-icon-btn header-logout-mobile"
+            title="Logout"
+            aria-label="Logout"
+            onClick={onLogout}
+          >
+            <LogOut size={16} />
           </button>
         </div>
       </header>
@@ -2740,17 +3402,9 @@ ${clone.outerHTML}</div></body></html>`;
         <HistoryPage
           history={history}
           onRestore={(entry) => {
-            setResult(entry.result);
+            setResult(sanitizeResult(entry.result));
             setManualUrl(entry.url);
             setSelectedMethods(entry.analysisTypes || []);
-            setActiveTab(0);
-            setSelectedBatchIndex(0);
-            setActivePage('scanner');
-          }}
-          onDownload={(entry) => {
-            // Load the result onto the scanner page, then capture the live DOM
-            pendingDownloadRef.current = true;
-            setResult(entry.result);
             setActiveTab(0);
             setSelectedBatchIndex(0);
             setActivePage('scanner');
@@ -2762,19 +3416,22 @@ ${clone.outerHTML}</div></body></html>`;
 
       {activePage === 'token-generator' && (
         <TokenGenerator
-          onScanFromCurl={async (url, requestHeaders, method, requestBody, aiFlag = true) => {
+          onScanFromCurl={async (url, requestHeaders, method, requestBody, _unused, chosenTests, corsMode, originUrl) => {
             setLoading(true);
             setError('');
             setEmailStatus(null);
-            const autoMethods = TESTING_METHODS.filter((m) => m.value !== 'cors').map((m) => m.value);
+            const methodsToRun = (chosenTests && chosenTests.length)
+              ? chosenTests
+              : TESTING_METHODS.filter((m) => m.value !== 'cors').map((m) => m.value);
             try {
               const body = {
                 url,
                 requestHeaders: requestHeaders || undefined,
                 method: method || undefined,
                 requestBody: requestBody || undefined,
-                analysisTypes: autoMethods,
-                aiAnalysis: aiFlag,
+                analysisTypes: methodsToRun,
+                ...(methodsToRun.includes('cors') && corsMode ? { corsAnalysisType: corsMode === 'active' ? 'Active CORS Test' : 'Passive CORS Test' } : {}),
+                ...(methodsToRun.includes('cors') && corsMode === 'active' && originUrl ? { origin: originUrl } : {}),
               };
               const res = await fetch('/api/scan', {
                 method: 'POST',
@@ -2783,14 +3440,12 @@ ${clone.outerHTML}</div></body></html>`;
               });
               const data = await res.json().catch(() => ({}));
               if (!res.ok) throw new Error(data.error || res.statusText || 'Scan failed');
-              // Reset result fully — do NOT merge with existing (this is a fresh curl-triggered scan)
-              setResult(data);
+              setResult(sanitizeResult(data));
               setManualUrl(url);
-              // Sync selectedMethods so incremental scan knows what was already done
-              setSelectedMethods(autoMethods);
+              setSelectedMethods(methodsToRun);
               setActiveTab(0);
               setSelectedBatchIndex(0);
-              saveToHistory(data, url, autoMethods);
+              saveToHistory(data, url, methodsToRun);
               setActivePage('scanner');
             } catch (err) {
               setError(err.message || 'Scan failed');
@@ -2802,30 +3457,89 @@ ${clone.outerHTML}</div></body></html>`;
         />
       )}
 
-      {activePage === 'scanner' && <div className="main-grid">
+      {activePage === 'scanner' && <div className="scan-layout">
         <div className="main-col">
+          <header className="scan-hero">
+            <div className="scan-hero-top">
+              <span className="scan-hero-eyebrow">Security Scanner</span>
+              <AnalysisInfoButton />
+            </div>
+            <h2 className="scan-hero-title">Start a Security Scan</h2>
+            <p className="scan-hero-sub">Test your API or website for common security vulnerabilities and get a detailed report.</p>
+          </header>
+
           <div className="form-card">
             <form onSubmit={handleSubmit}>
-              <div className="section-label">Step 1 — API URL</div>
-              <input type="url" className="manual-url" value={manualUrl} onChange={(e) => setManualUrl(e.target.value)} placeholder="https://api.example.com" />
-              <p className="form-prompt">Enter the API or website URL to scan. Use <code>https://</code> or <code>http://</code>.</p>
+              <div className="field-block">
+                <label className="field-label" htmlFor="target-url">Target URL</label>
+                <div className="url-field">
+                  <Link2 size={15} className="url-field-icon" aria-hidden />
+                  <input id="target-url" type="url" className="manual-url" value={manualUrl} onChange={(e) => setManualUrl(e.target.value)} placeholder="https://api.example.com" />
+                </div>
+                <p className="field-hint">Enter a valid API endpoint or website URL to scan. Use <code>https://</code> or <code>http://</code>.</p>
+              </div>
 
-              <div className="section-label" style={{ marginTop: '1.25rem' }}>Step 2 — Testing Methods</div>
-              <div className="methods-list">
-                {TESTING_METHODS.map((m) => {
-                  const existingForUrl = result && !result.batch ? result : null;
-                  const alreadyDone = !!existingForUrl?.[METHOD_TO_FIELD[m.value]];
-                  return (
-                    <div key={m.id} className={`method-item${alreadyDone ? ' method-item-done' : ''}`} onClick={() => toggleMethod(m.value)}>
-                      <input type="checkbox" id={m.id} checked={selectedMethods.includes(m.value)} onChange={() => {}} />
-                      <label htmlFor={m.id}>{m.label}</label>
-                      {alreadyDone && <span className="method-done-badge">✓ Done</span>}
-                    </div>
-                  );
-                })}
+              <div className="field-block">
+                <span className="field-label">Select Scan Profile</span>
+                <div className="profile-grid">
+                  {SCAN_PROFILES.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className={`profile-card${scanProfile === p.id ? ' is-active' : ''}`}
+                      onClick={() => applyScanProfile(p.id)}
+                      aria-pressed={scanProfile === p.id}
+                    >
+                      <span className="profile-card-icon"><p.Icon size={16} /></span>
+                      <span className="profile-card-text">
+                        <span className="profile-card-title">{p.label}</span>
+                        <span className="profile-card-hint">{p.hint}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="field-block">
+                <div className="field-label-row">
+                  <span className="field-label">Choose Security Checks</span>
+                  <span className="field-count">{selectedMethods.length} selected</span>
+                </div>
+                <p className="field-hint field-hint-lead">Select the checks you want to run. You can choose multiple.</p>
+                <div className="checks-grid">
+                  {TESTING_METHODS.map((m) => {
+                    const existingForUrl = result && !result.batch ? result : null;
+                    const alreadyDone = !!existingForUrl?.[METHOD_TO_FIELD[m.value]];
+                    const meta = CHECK_META[m.value] || { short: m.label, desc: '', Icon: Shield, tone: 'slate' };
+                    const checked = selectedMethods.includes(m.value);
+                    return (
+                      <label
+                        key={m.id}
+                        className={`check-card${checked ? ' is-selected' : ''}${alreadyDone ? ' method-item-done' : ''}`}
+                        title={m.label}
+                      >
+                        <input
+                          type="checkbox"
+                          id={m.id}
+                          className="check-card-box"
+                          checked={checked}
+                          onChange={() => toggleMethodManual(m.value)}
+                        />
+                        <span className="check-card-icon" data-tone={meta.tone} aria-hidden>
+                          <meta.Icon size={16} />
+                        </span>
+                        <span className="check-card-body">
+                          <span className="check-card-title">{meta.short}</span>
+                          <span className="check-card-desc">{meta.desc}</span>
+                        </span>
+                        {alreadyDone && <span className="method-done-badge">Done</span>}
+                      </label>
+                    );
+                  })}
+                </div>
                 {selectedMethods.includes('cors') && (
                   <div className="cors-row">
-                    <div className="section-label">CORS mode</div>
+                    <span className="field-label field-label-sm">CORS mode</span>
                     <div className="cors-mode">
                       <label><input type="radio" name="corsMode" value="passive" checked={corsMode === 'passive'} onChange={() => setCorsMode('passive')} /> Passive (no origin)</label>
                       <label><input type="radio" name="corsMode" value="active" checked={corsMode === 'active'} onChange={() => setCorsMode('active')} /> Active (send custom Origin)</label>
@@ -2834,21 +3548,10 @@ ${clone.outerHTML}</div></body></html>`;
                   </div>
                 )}
               </div>
-              <p className="form-prompt">Select at least one analysis type. For CORS, choose Passive (no origin) or Active (send custom Origin).</p>
 
-              <div className="ai-toggle-row" onClick={() => setUseAI((v) => !v)}>
-                <div className={`ai-toggle-switch${useAI ? ' ai-toggle-on' : ''}`}>
-                  <div className="ai-toggle-knob" />
-                </div>
-                <span className="ai-toggle-label">AI Analysis {useAI ? 'ON' : 'OFF'}</span>
-                <span className="ai-toggle-hint">{useAI ? 'AI will analyze results using OpenRouter (uses API quota)' : 'Scan without AI — saves API quota'}</span>
-              </div>
-
-              <div className="section-label" style={{ marginTop: '1.25rem' }}>Step 3 — Run</div>
-              <button type="submit" className="btn-primary" disabled={loading}>
-                {loading ? <><span className="spinner" /> Scanning...</> : 'Start Testing'}
+              <button type="submit" className="btn-primary btn-run" disabled={loading}>
+                {loading ? <><span className="spinner" /> Scanning…</> : <>Run Security Scan <ChevronRight size={16} /></>}
               </button>
-              <p className="form-prompt">Click to run the selected checks. Results will appear below in tabs (Security headers, CORS, SSL/TLS, etc.).</p>
             </form>
           </div>
 
@@ -2902,6 +3605,20 @@ ${clone.outerHTML}</div></body></html>`;
                   {tabs.map((t, i) => (
                     <button key={i} type="button" className={`tab ${activeTab === i ? 'active' : ''}`} onClick={() => setActiveTab(i)}>{t.name}</button>
                   ))}
+                  {tabs[activeTab]?.downloadPrefix && (
+                    <button
+                      type="button"
+                      className="tab-download-btn"
+                      title={`Download ${tabs[activeTab].downloadPrefix} report`}
+                      onClick={() => {
+                        const t = tabs[activeTab];
+                        const reportSlice = { [t.reportKey]: currentResult[t.reportKey], url: scanUrl, targetDomain: currentResult?.targetDomain || scanUrl };
+                        downloadSingleReport(reportSlice, t.downloadPrefix);
+                      }}
+                    >
+                      ⬇ Download {tabs[activeTab].downloadPrefix}
+                    </button>
+                  )}
                 </div>
                 <div className="tab-panel">{tabs[activeTab]?.content}</div>
               </>
@@ -2909,86 +3626,58 @@ ${clone.outerHTML}</div></body></html>`;
           </div>
         </div>
 
-        <aside className="sidebar-col">
-          <div className="sidebar-card sidebar-recipients-card">
-            <div className="sidebar-report-toggle" onClick={() => setSendReport(!sendReport)} role="button" tabIndex={0}>
-              <div className="sidebar-report-toggle-left">
-                <Send size={14} />
-                <span>Email Report</span>
-              </div>
-              <button type="button" className={`report-toggle-switch report-toggle-switch--sm${sendReport ? ' report-toggle-switch--on' : ''}`}
-                      onClick={(e) => { e.stopPropagation(); setSendReport(!sendReport); if (sendReport) { setRecipients(['']); } }}>
-                <span className="report-toggle-switch-thumb" />
-              </button>
-            </div>
-            {!sendReport && (
-              <p className="sidebar-recipients-hint" style={{ marginTop: '0.5rem' }}>Toggle on to send scan results via email.</p>
-            )}
-            {sendReport && (
-              <div className="sidebar-report-body">
-                <div className="sidebar-recipients-list">
-                  {recipients.map((r, i) => (
-                    <div key={i} className="sidebar-recipient-row">
-                      <div className="sidebar-recipient-input-wrap">
-                        <Mail size={13} className="sidebar-recipient-icon" />
-                        <input type="email" value={r} onChange={(e) => setRecipientAt(i, e.target.value)} placeholder={`Recipient ${i + 1}`} />
-                      </div>
-                      {recipients.length > 1 && (
-                        <button type="button" className="sidebar-recipient-remove" onClick={() => removeRecipient(i)} title="Remove">
-                          <X size={13} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                {recipients.filter(r => r.trim()).length > 0 && (
-                  <div className="sidebar-recipients-badges">
-                    {recipients.map((r, i) => r.trim() ? (
-                      <span key={i} className="recipient-badge recipient-badge-sm">
-                        <Mail size={10} />
-                        {r.trim().length > 22 ? r.trim().slice(0, 22) + '…' : r.trim()}
-                        <button type="button" onClick={() => removeRecipient(i)} className="recipient-badge-x"><X size={10} /></button>
-                      </span>
-                    ) : null)}
-                  </div>
-                )}
-                <button type="button" className="sidebar-recipients-add" onClick={addRecipient}>
-                  <Plus size={14} /> Add Recipient
+        <aside className="scan-aside">
+          <div className="aside-card aside-card-accent">
+            <span className="aside-card-badge"><ShieldCheck size={18} /></span>
+            <h3 className="aside-card-title">Why Scan?</h3>
+            <p className="aside-card-text">Find and fix security issues before attackers exploit them. Protect your APIs, data and users.</p>
+          </div>
+
+          <div className="aside-card">
+            <h3 className="aside-card-title">Quick Info</h3>
+            <ul className="aside-facts">
+              <li>
+                <Clock size={15} aria-hidden />
+                <span><span className="aside-fact-label">Scan time</span>~2–5 minutes</span>
+              </li>
+              <li>
+                <ListChecks size={15} aria-hidden />
+                <span><span className="aside-fact-label">Checks</span>{selectedMethods.length} selected</span>
+              </li>
+              <li>
+                <Target size={15} aria-hidden />
+                <span><span className="aside-fact-label">Supported targets</span>APIs and web applications</span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="aside-card">
+            <div className="aside-card-head">
+              <h3 className="aside-card-title">Recent Scans</h3>
+              {history.length > 0 && (
+                <button type="button" className="aside-link" onClick={() => setActivePage('history')}>
+                  View all <ChevronRight size={13} />
                 </button>
-                {result && result.emailSent !== undefined && (
-                  <p className="sidebar-email-status" style={{ color: result.emailSent ? 'var(--success)' : 'var(--danger)' }}>
-                    {result.emailSent ? '✓ Report sent.' : `✗ ${result.emailError || 'Failed to send.'}`}
-                  </p>
-                )}
-              </div>
+              )}
+            </div>
+            {history.length === 0 ? (
+              <p className="aside-card-text aside-card-empty">No scans yet. Your recent scans will appear here.</p>
+            ) : (
+              <ul className="recent-list">
+                {history.slice(0, 4).map((entry) => (
+                  <li key={entry.id} className="recent-item">
+                    <Link2 size={13} className="recent-item-icon" aria-hidden />
+                    <span className="recent-item-body">
+                      <span className="recent-item-url" title={entry.url}>{entry.url}</span>
+                      <span className="recent-item-meta">
+                        <span className="recent-item-dot" aria-hidden /> Completed · {formatRelativeTime(entry.scannedAt)}
+                      </span>
+                    </span>
+                    {entry.grade && <span className="recent-item-grade" data-grade={String(entry.grade).charAt(0)}>{entry.grade}</span>}
+                  </li>
+                ))}
+              </ul>
             )}
-          </div>
-          <div className="sidebar-card">
-            <h3><span className="icon">📥</span> Export to File</h3>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
-              Downloads the current report tab as a self-contained HTML file — exact styling, fonts, and colours preserved.
-            </p>
-            <button
-              type="button"
-              className="btn-sm export-download-btn"
-              style={{ width: '100%' }}
-              onClick={downloadCurrentReport}
-              disabled={!result || downloadingReport}
-              title={!result ? 'Run a scan first' : 'Download current report tab as HTML'}
-            >
-              {downloadingReport
-                ? <><span className="export-spinner" /> Preparing…</>
-                : <><span>⬇</span> Download Report</>}
-            </button>
-            {result && (
-              <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.5rem', lineHeight: 1.4 }}>
-                Opens as a web page. To save as PDF, open the file in your browser and use <strong>File → Print → Save as PDF</strong>.
-              </p>
-            )}
-          </div>
-          <div className="sidebar-card">
-            <h3><span className="icon">🕐</span> Recent</h3>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Recent scan history will appear here.</p>
           </div>
         </aside>
       </div>}
@@ -3005,6 +3694,12 @@ ${clone.outerHTML}</div></body></html>`;
 
 export default function App() {
   const { theme, toggleTheme } = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    if (location.pathname === '/') navigate('/scanner', { replace: true });
+  }, [location.pathname, navigate]);
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(null);

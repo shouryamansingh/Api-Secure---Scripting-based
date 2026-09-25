@@ -9,8 +9,6 @@ import json
 import os
 import re
 import shlex
-import threading
-import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -40,40 +38,13 @@ from scanner import (
     run_server_disclosure_analysis,
     run_error_handling_check,
     run_url_tampering_check,
+    run_sensitive_data_check,
     run_ssl_analysis,
 )
 
 app = Flask(__name__, static_folder="public", static_url_path="")
 MAX_UPLOAD_BYTES = int(MAX_UPLOAD_SIZE_MB * 1024 * 1024)
 
-# ── Background AI job store ────────────────────────────────────────────────────
-# job_id → {"status": "pending"|"done"|"failed", "result": dict|None, "error": str|None}
-_ai_jobs: dict = {}
-_ai_jobs_lock = threading.Lock()
-_AI_JOB_TTL = 600  # clean up jobs after 10 minutes
-
-
-def _ai_job_get(job_id: str) -> dict | None:
-    with _ai_jobs_lock:
-        return _ai_jobs.get(job_id)
-
-
-def _ai_job_set(job_id: str, status: str, result=None, error=None):
-    with _ai_jobs_lock:
-        _ai_jobs[job_id] = {
-            "status": status, "result": result, "error": error,
-            "created_at": _ai_jobs.get(job_id, {}).get("created_at", datetime.now(timezone.utc).isoformat()),
-        }
-
-
-def _ai_jobs_cleanup():
-    """Remove jobs older than TTL to avoid unbounded memory growth."""
-    cutoff = datetime.now(timezone.utc).timestamp() - _AI_JOB_TTL
-    with _ai_jobs_lock:
-        stale = [jid for jid, j in _ai_jobs.items()
-                 if datetime.fromisoformat(j.get("created_at", "2000-01-01T00:00:00+00:00")).timestamp() < cutoff]
-        for jid in stale:
-            del _ai_jobs[jid]
 
 
 def _security_headers(response):
@@ -164,7 +135,7 @@ def _safe_report(value, error_fallback):
     return value
 
 
-def _scan_one(normalized, data, want_headers, want_cors, want_server, want_ssl, want_error, want_tamper, extra_headers=None, extra_method=None, extra_body=None, want_ai=True):
+def _scan_one(normalized, data, want_headers, want_cors, want_server, want_ssl, want_error, want_tamper, want_pii=False, extra_headers=None, extra_method=None, extra_body=None):
     origin = (data.get("origin") or data.get("Origin") or "").strip()
     domain = get_domain(normalized)
     method = (extra_method or "GET").upper() if extra_method else "GET"
@@ -235,22 +206,26 @@ def _scan_one(normalized, data, want_headers, want_cors, want_server, want_ssl, 
         except Exception as e:
             result["urlTamperingReport"] = {"targetDomain": domain, "error": str(e), "tests": []}
 
+    if want_pii:
+        try:
+            result["sensitiveDataReport"] = _safe_report(
+                run_sensitive_data_check(normalized, extra_headers=extra_headers, method=method, body=body),
+                {"targetDomain": domain, "error": "Sensitive data check failed", "riskLevel": "Unknown"},
+            )
+        except Exception as e:
+            result["sensitiveDataReport"] = {"targetDomain": domain, "error": str(e), "riskLevel": "Unknown"}
+
     if want_ssl and result.get("sslReport") is None:
         result["sslReport"] = {"host": domain, "error": True, "message": "SSL analysis did not complete", "scannedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"}
 
-    # ── Hybrid AI enrichment ─────────────────────────────────────────────────
-    # Step 1: Always apply instant template analysis so user never sees "AI not available"
-    # Step 2: Check cache — if we have a fresh LLM result, apply it immediately
-    # Step 3: If no cache and AI is enabled, fire a background LLM job and return a job_id
-    #         The frontend polls /api/ai-poll/<job_id> and upgrades the display when ready
+    # ── Template-based analysis (deterministic, always consistent with scan) ──
     hr = result.get("headersReport")
-    if hr is not None and want_ai:
+    if hr is not None:
         try:
             from template_analysis import analyze_headers_template
             evaluated = hr.get("evaluatedHeaders") or {}
-
-            # Always apply template first — instant, zero cost
-            tmpl = analyze_headers_template(evaluated, domain)
+            extra_findings = hr.get("extraFindings") or []
+            tmpl = analyze_headers_template(evaluated, domain, extra_findings=extra_findings)
             hr["aiHeaderNotes"] = tmpl["aiHeaderNotes"]
             hr["aiHeaders"] = tmpl["aiHeaders"]
             hr["aiSummary"] = tmpl["aiSummary"]
@@ -260,82 +235,12 @@ def _scan_one(normalized, data, want_headers, want_cors, want_server, want_ssl, 
             hr["aiTopRecs"] = tmpl["aiTopRecs"]
             hr["aiSource"] = "template"
             hr["aiError"] = None
+            hr["extraFindings"] = tmpl.get("extraFindings", [])
             result["aiEnabled"] = True
-
-            from config import AI_ENABLED
-            if AI_ENABLED:
-                from ai_service import analyze_headers as ai_analyze, _cache_get, cache_invalidate
-
-                def _cache_matches_scan(cached_result: dict, current_headers: dict) -> bool:
-                    """
-                    Validate that cached LLM data still reflects the current header state.
-                    Returns False (stale) if:
-                      - Cached total header count differs significantly from current
-                      - Any header's present/absent state differs between cache and scan
-                    """
-                    cached_hdrs = {h["name"]: h for h in (cached_result.get("aiHeaders") or [])}
-                    if not cached_hdrs:
-                        return False
-                    # Check total count sanity
-                    if abs(len(cached_hdrs) - len(current_headers)) > 2:
-                        return False
-                    # Check each header's present state
-                    for name, info in current_headers.items():
-                        current_present = info.get("present", False)
-                        cached_present = cached_hdrs.get(name, {}).get("present")
-                        if cached_present is not None and cached_present != current_present:
-                            return False
-                    return True
-
-                # Check if we have a fresh LLM result in cache AND it matches current headers
-                cached = _cache_get(domain)
-                if cached and _cache_matches_scan(cached, evaluated):
-                    app.logger.info("Applying cached LLM result for domain=%s", domain)
-                    for key in ("aiHeaders", "aiSummary", "aiExecutiveSummary", "aiOverallRisk",
-                                "aiRiskExplanation", "aiTopRecs", "aiHeaderNotes"):
-                        if cached.get(key) is not None:
-                            hr[key] = cached[key]
-                    hr["aiSource"] = "cache"
-                    hr["aiJobId"] = None
-                else:
-                    if cached:
-                        app.logger.info("Cache STALE for domain=%s (headers changed) — invalidating", domain)
-                        cache_invalidate(domain)
-                    # Fire background LLM job
-                    job_id = str(uuid.uuid4())
-                    hr["aiJobId"] = job_id
-                    hr["aiSource"] = "template"
-                    _ai_job_set(job_id, "pending")
-                    app.logger.info("Spawning background LLM job=%s for domain=%s", job_id, domain)
-
-                    def _bg_llm(jid, evaled, dom):
-                        try:
-                            from ai_service import analyze_headers as _ai_h
-                            res = _ai_h(evaled, dom)
-                            if res:
-                                _ai_job_set(jid, "done", result=res)
-                                app.logger.info("Background LLM job=%s done for domain=%s", jid, dom)
-                            else:
-                                _ai_job_set(jid, "failed", error="LLM returned no result")
-                                app.logger.warning("Background LLM job=%s failed for domain=%s", jid, dom)
-                        except Exception as bg_err:
-                            _ai_job_set(jid, "failed", error=str(bg_err))
-                            app.logger.warning("Background LLM job=%s error: %s", jid, bg_err)
-                        finally:
-                            _ai_jobs_cleanup()
-
-                    t = threading.Thread(target=_bg_llm, args=(job_id, evaluated, domain), daemon=True)
-                    t.start()
-            else:
-                hr["aiJobId"] = None
-
         except Exception as ai_err:
-            app.logger.warning("AI hybrid enrichment failed: %s", ai_err, exc_info=True)
+            app.logger.warning("Template analysis failed: %s", ai_err, exc_info=True)
             result["aiEnabled"] = False
             hr["aiError"] = f"Analysis error: {ai_err}"
-    elif hr is not None and not want_ai:
-        result["aiEnabled"] = False
-        result["aiSkipped"] = True
     else:
         result["aiEnabled"] = False
 
@@ -452,7 +357,7 @@ def _scan_one(normalized, data, want_headers, want_cors, want_server, want_ssl, 
             ai_header_summary = (
                 f"{ais.get('criticalCount', 0)} critical, "
                 f"{ais.get('warningCount', 0)} warning, "
-                f"{ais.get('okCount', 0)} OK headers (AI)"
+                f"{ais.get('okCount', 0)} OK headers"
             )
 
         result["overallSummary"] = {
@@ -532,8 +437,9 @@ def scan():
         want_ssl = _want(analysis_types, "SSL / TLS analysis", "SSL", "TLS", "m_ssl", "ssl/tls", "ssl tls", "improper tls")
         want_error = _want(analysis_types, "Improper Error Handling", "Improper Error", "m_error", "error handling")
         want_tamper = _want(analysis_types, "URL Tampering Analysis", "URL Tampering", "m_url", "tampering")
+        want_pii = _want(analysis_types, "Sensitive Data Exposure", "sensitive data", "PII", "m_pii")
 
-        if not any([want_headers, want_cors, want_server, want_ssl, want_error, want_tamper]):
+        if not any([want_headers, want_cors, want_server, want_ssl, want_error, want_tamper, want_pii]):
             return jsonify({"error": "Select at least one analysis type."}), 400
 
         # Optional auth headers (e.g. from curl with token) so scanner can hit protected APIs
@@ -549,14 +455,9 @@ def scan():
         if extra_body is not None and not isinstance(extra_body, str):
             extra_body = None
 
-        # AI analysis toggle — default True for backward compatibility
-        want_ai = data.get("aiAnalysis", True)
-        if isinstance(want_ai, str):
-            want_ai = want_ai.lower() not in ("false", "0", "no", "off")
-
         results = []
         for normalized in urls_to_scan:
-            results.append(_scan_one(normalized, data, want_headers, want_cors, want_server, want_ssl, want_error, want_tamper, extra_headers=extra_headers, extra_method=extra_method, extra_body=extra_body, want_ai=want_ai))
+            results.append(_scan_one(normalized, data, want_headers, want_cors, want_server, want_ssl, want_error, want_tamper, want_pii=want_pii, extra_headers=extra_headers, extra_method=extra_method, extra_body=extra_body))
 
         # Build response payload
         if len(results) == 1:
@@ -591,83 +492,6 @@ def scan():
         return jsonify({"error": "Server error. Please try again."}), 500
 
 
-@app.route("/api/ai-poll/<job_id>", methods=["GET", "OPTIONS"])
-def ai_poll(job_id):
-    """
-    Poll for the result of a background LLM job.
-    Returns:
-      {"status": "pending"}                       — LLM still running
-      {"status": "done", "aiData": {...}}         — LLM finished, upgraded data included
-      {"status": "failed", "error": "..."}        — LLM failed (template result already displayed)
-      {"status": "not_found"}                     — job_id unknown (expired or invalid)
-    """
-    if request.method == "OPTIONS":
-        return "", 204
-    job = _ai_job_get(job_id)
-    if job is None:
-        return jsonify({"status": "not_found"}), 404
-    if job["status"] == "pending":
-        return jsonify({"status": "pending"})
-    if job["status"] == "failed":
-        return jsonify({"status": "failed", "error": job.get("error") or "LLM analysis failed"})
-    # done
-    return jsonify({"status": "done", "aiData": job.get("result") or {}})
-
-
-@app.route("/api/ai-retry", methods=["POST", "OPTIONS"])
-def ai_retry():
-    """
-    Force a fresh LLM analysis for a domain (bypasses cache).
-    Returns {"jobId": "<uuid>"} immediately; the frontend polls /api/ai-poll/<jobId>.
-    """
-    if request.method == "OPTIONS":
-        return "", 204
-    try:
-        data = request.get_json(silent=True) or {}
-        domain = (data.get("domain") or "").strip()
-        evaluated = data.get("evaluatedHeaders") or {}
-        if not domain:
-            return jsonify({"error": "domain is required"}), 400
-
-        # Invalidate any cached result so the LLM runs fresh
-        try:
-            from ai_service import cache_invalidate
-            cache_invalidate(domain)
-        except Exception:
-            pass
-
-        job_id = str(uuid.uuid4())
-        _ai_job_set(job_id, "pending")
-        app.logger.info("Retry LLM job=%s for domain=%s", job_id, domain)
-
-        def _bg(jid, ev, dom):
-            try:
-                from ai_service import analyze_headers as _ai_h
-                res = _ai_h(ev, dom, force_refresh=True)
-                if res:
-                    _ai_job_set(jid, "done", result=res)
-                else:
-                    _ai_job_set(jid, "failed", error="LLM returned no result")
-            except Exception as e:
-                _ai_job_set(jid, "failed", error=str(e))
-            finally:
-                _ai_jobs_cleanup()
-
-        threading.Thread(target=_bg, args=(job_id, evaluated, domain), daemon=True).start()
-        return jsonify({"jobId": job_id})
-    except Exception as e:
-        app.logger.exception("ai-retry error")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/ai-cache-info", methods=["GET"])
-def ai_cache_info():
-    """Debug endpoint — shows current LLM cache state."""
-    try:
-        from ai_service import get_cache_info
-        return jsonify(get_cache_info())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/download-report", methods=["POST", "OPTIONS"])
@@ -1271,110 +1095,8 @@ def execute_curl_chain():
         return jsonify({"error": "Server error. Please try again."}), 500
 
 
-@app.route("/api/openrouter-usage", methods=["GET", "OPTIONS"])
-def openrouter_usage():
-    """Return OpenRouter key usage, limits, and key rotation state."""
-    if request.method == "OPTIONS":
-        return "", 204
-    try:
-        from config import AI_ENABLED, OPENROUTER_API_KEYS, OPENROUTER_MODEL
-        if not AI_ENABLED:
-            return jsonify({"enabled": False, "error": "No OPENROUTER_API_KEYS set in .env"})
-
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        import requests as _req
-
-        # Fetch usage from the first key (representative)
-        resp = _req.get(
-            "https://openrouter.ai/api/v1/auth/key",
-            headers={"Authorization": f"Bearer {OPENROUTER_API_KEYS[0]}"},
-            timeout=10,
-            verify=False,
-        )
-        resp.raise_for_status()
-        data = resp.json().get("data", {})
-
-        try:
-            from ai_service import get_rate_state
-            rate_state = get_rate_state()
-        except Exception:
-            rate_state = {}
-
-        return jsonify({
-            "enabled": True,
-            "model": OPENROUTER_MODEL,
-            "label": data.get("label", "—"),
-            "isFreeTier": data.get("is_free_tier", False),
-            "usage": data.get("usage", 0),
-            "usageDaily": data.get("usage_daily", 0),
-            "usageWeekly": data.get("usage_weekly", 0),
-            "usageMonthly": data.get("usage_monthly", 0),
-            "limit": data.get("limit"),
-            "limitRemaining": data.get("limit_remaining"),
-            "limitReset": data.get("limit_reset"),
-            "expiresAt": data.get("expires_at"),
-            "totalKeys": len(OPENROUTER_API_KEYS),
-            **rate_state,
-        })
-    except Exception as e:
-        app.logger.warning("openrouter_usage error: %s", e)
-        return jsonify({"enabled": False, "error": str(e)}), 500
 
 
-@app.route("/api/ai-rate-status", methods=["GET", "OPTIONS"])
-def ai_rate_status():
-    """Cheap endpoint — returns session-level AI call stats without hitting OpenRouter."""
-    if request.method == "OPTIONS":
-        return "", 204
-    try:
-        from config import AI_ENABLED, OPENROUTER_MODEL
-        if not AI_ENABLED:
-            return jsonify({"enabled": False})
-        from ai_service import get_rate_state
-        state = get_rate_state()
-        return jsonify({"enabled": True, "model": OPENROUTER_MODEL, **state})
-    except Exception as e:
-        return jsonify({"enabled": False, "error": str(e)}), 500
-
-
-@app.route("/api/ai-analyze", methods=["POST", "OPTIONS"])
-def ai_analyze():
-    """
-    On-demand AI analysis endpoint.
-    Body: { "type": "headers"|"content", "data": <evaluated_headers dict or html string>, "domain": "example.com" }
-    Returns the raw AI result JSON.
-    """
-    if request.method == "OPTIONS":
-        return "", 204
-    try:
-        from config import AI_ENABLED
-        if not AI_ENABLED:
-            return jsonify({"error": "AI analysis is not configured. Set OPENROUTER_API_KEYS in .env to enable."}), 400
-
-        from ai_service import analyze_headers as ai_headers, analyze_content as ai_content
-        body = request.get_json(force=True, silent=True) or {}
-        analysis_type = body.get("type", "headers")
-        domain = body.get("domain", "unknown")
-        # Accept both 'data' and 'evaluatedHeaders' keys for backwards compatibility
-        data = body.get("data") or body.get("evaluatedHeaders")
-
-        if analysis_type == "headers":
-            result = ai_headers(data or {}, domain)
-        elif analysis_type == "content":
-            result = ai_content(data or "")
-        else:
-            return jsonify({"error": "Invalid type. Use 'headers' or 'content'."}), 400
-
-        if result is None:
-            return jsonify({"error": "AI analysis failed or returned no data. Check OpenRouter API key and model."}), 500
-
-        # Return AI fields flat so frontend can spread them directly onto headersReport
-        return jsonify(result)
-
-    except Exception as err:
-        app.logger.exception("AI analyze error")
-        return jsonify({"error": "AI analysis failed."}), 500
 
 
 if __name__ == "__main__":

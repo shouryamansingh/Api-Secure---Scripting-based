@@ -1,0 +1,348 @@
+# Finding templates for HTTP header analysis.
+#
+# Each entry is keyed by finding id. Severity / deduction / title / detail are
+# transcribed verbatim from the original scanner.py code. Dynamic content uses
+# {placeholder} substitutions filled at call time from a ctx dict passed by
+# Python; for rules whose id itself is dynamic (e.g. csp-http-<directive>),
+# the caller supplies id_override.
+#
+# Keys present in the template are copied to the output finding as-is. Findings
+# emitted by deep_analyze_* carry a "deduction" field; findings emitted by
+# _detect_server_disclosure do not. Do not add a deduction key to entries that
+# the original code did not emit one for.
+
+# ─────────────────────────── Content-Security-Policy ───────────────────────────
+
+csp-empty:
+  severity: critical
+  title: Empty CSP
+  detail: "The Content-Security-Policy header is present but empty, providing no protection."
+  deduction: 10
+
+csp-no-default-src:
+  severity: medium
+  title: Missing default-src directive
+  detail: "Without default-src, any directive you haven't explicitly set has no fallback restriction — the browser allows loading from anywhere for those resource types."
+  deduction: 3
+
+csp-unsafe-inline:
+  severity: high
+  title: "'unsafe-inline' in script-src"
+  detail: "Allows inline <script> tags to execute, largely defeating CSP's XSS protection. Use nonce-based or hash-based CSP instead."
+  deduction: 5
+
+csp-unsafe-eval:
+  severity: high
+  title: "'unsafe-eval' in script-src"
+  detail: "Allows eval(), Function(), setTimeout(string), and similar dynamic code execution. Attackers who achieve injection can run arbitrary code."
+  deduction: 5
+
+csp-unsafe-hashes:
+  severity: medium
+  title: "'unsafe-hashes' in script-src"
+  detail: "Allows specific inline event handlers by hash. While safer than 'unsafe-inline', it still permits some inline script execution."
+  deduction: 2
+
+csp-blob-script:
+  severity: medium
+  title: "blob: in script-src"
+  detail: "Allows scripts to be loaded from blob: URLs, which can be crafted by an attacker who has achieved partial injection."
+  deduction: 2
+
+csp-data-script:
+  severity: high
+  title: "data: in script-src"
+  detail: "Allows scripts to be loaded from data: URIs. Attackers can embed full scripts in a data: URI to completely bypass CSP."
+  deduction: 4
+
+# Dynamic id: csp-http-<directive_name>. ctx provides {directive_name} and {http_source}.
+csp-http:
+  severity: medium
+  title: "http: source in {directive_name}"
+  detail: "The {directive_name} directive allows loading over plain HTTP ({http_source}), enabling man-in-the-middle attacks on those resources."
+  deduction: 2
+
+# ctx provides {directives_display} (already pre-formatted with optional "(+N more)")
+# and {directives_full} for the detail line.
+csp-wildcard:
+  severity: high
+  title: "Wildcard '*' in {directives_display}"
+  detail: "The wildcard '*' allows loading from any origin in: {directives_full}. This makes those directives ineffective."
+  deduction: 4
+
+csp-data-img:
+  severity: info
+  title: "data: in img-src"
+  detail: "Allows images from data: URIs. Generally low risk but can aid CSS-based data exfiltration or pixel tracking bypasses."
+  deduction: 0
+
+csp-data-font:
+  severity: low
+  title: "data: in font-src"
+  detail: "Allows fonts from data: URIs. Minor risk — embedded fonts avoid network requests but make CSP harder to audit."
+  deduction: 0
+
+csp-data-connect:
+  severity: medium
+  title: "data: in connect-src"
+  detail: "Allows fetch/XHR to data: URIs, which can be abused to exfiltrate data without triggering network-based monitoring."
+  deduction: 2
+
+csp-no-base-uri:
+  severity: medium
+  title: Missing base-uri directive
+  detail: "Without base-uri, attackers can inject a <base> tag to hijack relative URLs, redirecting script/image loads to a malicious server."
+  deduction: 2
+
+csp-no-object-src:
+  severity: medium
+  title: Missing object-src directive
+  detail: "Without object-src set to 'none', legacy plugins (Flash, Java applets, Silverlight) may be embeddable on your page, enabling code execution bypasses."
+  deduction: 2
+
+csp-no-form-action:
+  severity: medium
+  title: Missing form-action directive
+  detail: "Without form-action, attackers who inject a <form> can submit data to any origin, enabling credential theft even with a strict script-src."
+  deduction: 2
+
+csp-no-frame-ancestors:
+  severity: low
+  title: Missing frame-ancestors directive
+  detail: "frame-ancestors in CSP is the modern replacement for X-Frame-Options and provides more granular control over who can embed your page."
+  deduction: 1
+
+csp-no-upgrade-insecure:
+  severity: low
+  title: Missing upgrade-insecure-requests directive
+  detail: "This directive instructs browsers to automatically upgrade http:// requests to https://, preventing accidental mixed content on HTTPS sites."
+  deduction: 1
+
+csp-unsafe-inline-style:
+  severity: low
+  title: "'unsafe-inline' in style-src"
+  detail: "Allows inline styles. Lower risk than script unsafe-inline but can aid CSS-based data exfiltration attacks (e.g., reading input values via CSS selectors)."
+  deduction: 1
+
+csp-deprecated-report-uri:
+  severity: info
+  title: Using deprecated report-uri
+  detail: "report-uri is deprecated in favour of report-to (Reporting API). Migrate to report-to for better browser support going forward."
+  deduction: 0
+
+# ─────────────────────────── Strict-Transport-Security ───────────────────────────
+
+hsts-empty:
+  severity: critical
+  title: Empty HSTS
+  detail: "The HSTS header is present but empty."
+  deduction: 10
+
+hsts-no-max-age:
+  severity: high
+  title: Missing max-age directive
+  detail: "HSTS without max-age is ignored by browsers."
+  deduction: 8
+
+hsts-max-age-zero:
+  severity: high
+  title: max-age=0 disables HSTS
+  detail: "Setting max-age to 0 instructs browsers to delete the HSTS policy, effectively disabling HTTPS enforcement."
+  deduction: 8
+
+# ctx: {max_age}, {days}
+hsts-max-age-short:
+  severity: medium
+  title: "max-age too short ({max_age}s = {days}d)"
+  detail: "Current max-age is {max_age} seconds ({days} days). Recommended minimum is 31536000 (1 year)."
+  deduction: 3
+
+hsts-max-age-moderate:
+  severity: low
+  title: "max-age below best practice ({max_age}s = {days}d)"
+  detail: "Current max-age is {days} days. Best practice is 31536000 seconds (365 days) for HSTS preload eligibility."
+  deduction: 1
+
+hsts-no-subdomains:
+  severity: low
+  title: Missing includeSubDomains
+  detail: "Subdomains are not covered by HSTS. Attackers could target sub.yourdomain.com over plain HTTP."
+  deduction: 1
+
+hsts-no-preload:
+  severity: info
+  title: Missing preload directive
+  detail: "Without preload, the first visit is still vulnerable (TOFU). Submit to hstspreload.org for built-in browser protection."
+  deduction: 0
+
+# ─────────────────────────── X-Frame-Options ───────────────────────────
+
+xfo-allow-from:
+  severity: medium
+  title: ALLOW-FROM is not supported by modern browsers
+  detail: "Chrome, Firefox, and Edge ignore ALLOW-FROM. Use CSP frame-ancestors instead."
+  deduction: 3
+
+xfo-sameorigin:
+  severity: info
+  title: SAMEORIGIN allows same-origin framing
+  detail: "SAMEORIGIN permits embedding by pages on the same origin. Use DENY if the site should never be framed."
+  deduction: 0
+
+# ctx: {value_trunc}
+xfo-invalid:
+  severity: medium
+  title: "Non-standard value: {value_trunc}"
+  detail: "Valid values are DENY or SAMEORIGIN. Invalid values are ignored by browsers."
+  deduction: 3
+
+# ─────────────────────────── Referrer-Policy ───────────────────────────
+
+# ctx: {value_trunc}
+rp-duplicate:
+  severity: low
+  title: Duplicate Referrer-Policy values
+  detail: "The header contains duplicate values: '{value_trunc}'. Browsers use the last valid value. Send each value only once."
+  deduction: 1
+
+# ctx: {invalid_display}
+rp-invalid:
+  severity: medium
+  title: "Invalid Referrer-Policy value: {invalid_display}"
+  detail: "'{invalid_display}' is not a valid Referrer-Policy value. Browsers will ignore it and fall back to the next valid value or the default."
+  deduction: 2
+
+rp-unsafe-url:
+  severity: high
+  title: Referrer-Policy set to unsafe-url
+  detail: "The full URL (including path and query string) is sent as the referrer to ALL destinations including HTTP, leaking session tokens, API keys, and user identifiers in URLs."
+  deduction: 5
+
+rp-downgrade:
+  severity: low
+  title: no-referrer-when-downgrade leaks full URL
+  detail: "Full URL is sent as referrer for HTTPS-to-HTTPS navigations. URL path and query parameters are visible to third-party sites. Use strict-origin-when-cross-origin for less leakage."
+  deduction: 1
+
+# ctx: {effective}
+rp-origin-only:
+  severity: info
+  title: "Referrer-Policy: {effective}"
+  detail: "Origin is sent as referrer to cross-origin destinations. Consider strict-origin-when-cross-origin for better privacy."
+  deduction: 0
+
+# ─────────────────────────── X-XSS-Protection ───────────────────────────
+
+xxss-disabled:
+  severity: medium
+  title: XSS filter explicitly disabled (0)
+  detail: "Setting X-XSS-Protection to 0 disables the browser's built-in XSS filter. While some security researchers recommend this to avoid filter-based bypasses, ensure CSP is strong enough to compensate."
+  deduction: 2
+
+xxss-no-block:
+  severity: low
+  title: Missing mode=block
+  detail: "Without mode=block, the browser may attempt to sanitize the page instead of blocking it, which can introduce new vulnerabilities."
+  deduction: 1
+
+# ─────────────────────────── Permissions-Policy ───────────────────────────
+
+# Dynamic id: pp-permissive-<feature>. ctx: {feature}, {desc}
+pp-permissive:
+  severity: medium
+  title: "{feature} allowed for all origins"
+  detail: "The {desc} feature is set to *, allowing any embedded third-party to use {desc}. Restrict to {feature}=() to deny by default."
+  deduction: 2
+
+# Dynamic id: pp-self-<feature>. ctx: {feature}, {desc}
+pp-self:
+  severity: info
+  title: "{feature} allowed for self"
+  detail: "The {desc} feature is restricted to same-origin. Deny entirely with {feature}=() if your app doesn't need it."
+  deduction: 0
+
+pp-no-floc-block:
+  severity: info
+  title: FLoC/Topics API not explicitly blocked
+  detail: "Consider adding interest-cohort=() or browsing-topics=() to prevent your site from being included in Google's interest-based ad tracking cohorts."
+  deduction: 0
+
+# ─────────────────────────── COEP ───────────────────────────
+
+coep-unsafe-none:
+  severity: low
+  title: COEP set to unsafe-none
+  detail: "unsafe-none provides no cross-origin isolation. Use require-corp or credentialless for Spectre protection."
+  deduction: 1
+
+# ─────────────────────────── COOP ───────────────────────────
+
+coop-unsafe-none:
+  severity: low
+  title: COOP set to unsafe-none
+  detail: "unsafe-none allows cross-origin windows to access your window object. Use same-origin for full isolation."
+  deduction: 1
+
+coop-allow-popups:
+  severity: info
+  title: COOP allows popups cross-origin access
+  detail: "same-origin-allow-popups still permits opened windows to maintain a reference back. Use same-origin for stricter isolation."
+  deduction: 0
+
+# ─────────────────────────── X-Content-Type-Options ───────────────────────────
+
+# ctx: {value_trunc}
+xcto-invalid:
+  severity: medium
+  title: "Non-standard value: {value_trunc}"
+  detail: "The only valid value is 'nosniff'. Non-standard values are ignored by browsers."
+  deduction: 3
+
+# ─────────────────────────── X-Permitted-Cross-Domain-Policies ───────────────────────────
+
+# ctx: {value}
+xpcd-permissive:
+  severity: low
+  title: "Permissive value: {value}"
+  detail: "Value '{value}' allows some cross-domain plugin access. Set to 'none' unless legacy Flash/PDF support is required."
+  deduction: 1
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Server disclosure findings (emitted by _detect_server_disclosure).
+# These do NOT carry a deduction field — the original code does not set one.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ctx: {server_trunc60}
+server-version-disclosure:
+  severity: medium
+  title: "Server header discloses version: {server_trunc60}"
+  detail: "The Server header reveals the software name and version, helping attackers find known CVEs for this exact release. Remove the version or set a generic value."
+
+# ctx: {server_trunc40}
+server-name-disclosure:
+  severity: low
+  title: "Server header: {server_trunc40}"
+  detail: "The Server header reveals the software name. Consider removing it or using a generic value."
+
+# Dynamic id: internal-ip-<hdr_name>. ctx: {hdr_name}, {ip}
+internal-ip:
+  severity: medium
+  title: "Internal IP address leaked in {hdr_name}: {ip}"
+  detail: "The {hdr_name} header contains a private/internal IP address ({ip}). This reveals internal network topology and can help attackers target internal systems."
+
+# Dynamic id: version-<hdr_name>. ctx: {hdr_name}, {version}
+version-in-header:
+  severity: low
+  title: "Version number in {hdr_name}: {version}"
+  detail: "The {hdr_name} header contains what appears to be a version number ({version}). Version disclosure helps attackers identify exploitable software."
+
+missing-corp:
+  severity: info
+  title: Missing Cross-Origin-Resource-Policy (CORP)
+  detail: "CORP controls which origins can load your resources. Setting it to 'same-origin' or 'same-site' prevents other sites from embedding your resources, mitigating side-channel attacks."
+
+# ctx: {cache_state} — either "'<value>'" or "no Cache-Control header set"
+cache-api-no-store:
+  severity: low
+  title: "API response may be cached (missing no-store)"
+  detail: "API responses with sensitive data should include Cache-Control: no-store to prevent browsers and proxies from storing the response. Currently: {cache_state}."

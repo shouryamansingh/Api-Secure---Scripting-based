@@ -1,0 +1,37 @@
+# Headers that are deprecated or actively dangerous to send. Loaded as a dict
+# (order preserved). When any of these is present in a response, a finding is
+# emitted with id "deprecated-<lowercased header name>".
+#
+# Procedural details preserved in Python:
+#   - X-Powered-By prefixes the detail with "Value: <first 50 chars>. ".
+# Everything else uses these values verbatim.
+
+Expect-CT:
+  severity: info
+  title: Deprecated Expect-CT header present
+  detail: "Expect-CT is deprecated — Certificate Transparency is now enforced by default in all major browsers. This header can be safely removed."
+
+X-Powered-By:
+  severity: medium
+  title: X-Powered-By discloses technology stack
+  detail: "Reveals the server-side technology (e.g., Express, PHP, ASP.NET), helping attackers target known vulnerabilities specific to that framework. Remove this header."
+
+X-AspNet-Version:
+  severity: medium
+  title: X-AspNet-Version discloses ASP.NET version
+  detail: "Exposes the exact ASP.NET runtime version, enabling targeted exploitation of known CVEs."
+
+X-AspNetMvc-Version:
+  severity: medium
+  title: X-AspNetMvc-Version discloses MVC version
+  detail: "Exposes the ASP.NET MVC version number, aiding attackers in finding version-specific exploits."
+
+Public-Key-Pins:
+  severity: medium
+  title: Deprecated Public-Key-Pins (HPKP) header present
+  detail: "HPKP is deprecated and removed from all major browsers. Misconfigured pins can permanently lock users out of your site. Remove this header immediately."
+
+Public-Key-Pins-Report-Only:
+  severity: info
+  title: Deprecated Public-Key-Pins-Report-Only present
+  detail: "HPKP reporting is deprecated. Remove this header — it no longer serves any purpose."

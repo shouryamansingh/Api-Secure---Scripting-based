@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="API Secure">
+  <!-- Shield with a cut-out check: single path so the dark-mode invert filter
+       keeps the check readable instead of flattening a second fill to white. -->
+  <path
+     fill="#002970"
+     fill-rule="evenodd"
+     d="M12 1.25 22 5.4v6.9c0 5.42-4.1 9.62-10 10.7C6.1 21.92 2 17.72 2 12.3V5.4Zm-1.32 15.9 6.74-6.73-1.6-1.6-5.14 5.13-2.5-2.5-1.6 1.6Z" />
+</svg>

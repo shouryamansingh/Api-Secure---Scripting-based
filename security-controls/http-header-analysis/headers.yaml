@@ -1,0 +1,13 @@
+# Required security headers. Order matters: it controls the order in
+# build_evaluated_headers() output, which is consumed by the frontend.
+required_headers:
+  - Content-Security-Policy
+  - Strict-Transport-Security
+  - X-Content-Type-Options
+  - X-Frame-Options
+  - Referrer-Policy
+  - Permissions-Policy
+  - X-XSS-Protection
+  - Cross-Origin-Embedder-Policy
+  - Cross-Origin-Opener-Policy
+  - X-Permitted-Cross-Domain-Policies

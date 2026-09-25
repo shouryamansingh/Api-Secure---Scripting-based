@@ -1,9 +1,25 @@
 import { useState, useCallback, useEffect } from 'react';
-import { motion } from 'framer-motion';
 import { LogOut, Settings, Shield, Terminal, History } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
 
-export default function Sidebar({ user, onLogout, activePage, onNavigate }) {
-  const [open, setOpen] = useState(false);
+const PAGE_TO_PATH = {
+  'scanner':         '/scanner',
+  'token-generator': '/testcurl',
+  'history':         '/history',
+  'settings':        '/settings',
+};
+const PATH_TO_PAGE = {
+  '/scanner':  'scanner',
+  '/testcurl': 'token-generator',
+  '/history':  'history',
+  '/settings': 'settings',
+  '/':         'scanner',
+};
+
+export default function Sidebar({ user, onLogout }) {
+  const navigate   = useNavigate();
+  const location   = useLocation();
+  const activePage = PATH_TO_PAGE[location.pathname] || 'scanner';
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [avatarImgFailed, setAvatarImgFailed] = useState(false);
 
@@ -17,10 +33,10 @@ export default function Sidebar({ user, onLogout, activePage, onNavigate }) {
   };
 
   const links = [
-    { id: 'scanner', label: 'Scanner', icon: <Shield size={20} /> },
-    { id: 'token-generator', label: 'Token Generator', icon: <Terminal size={20} /> },
-    { id: 'history', label: 'History', icon: <History size={20} /> },
-    { id: 'settings', label: 'Settings', icon: <Settings size={20} /> },
+    { id: 'scanner', label: 'Scanner', icon: <Shield size={18} /> },
+    { id: 'token-generator', label: 'Test Curl', icon: <Terminal size={18} /> },
+    { id: 'history', label: 'History', icon: <History size={18} /> },
+    { id: 'settings', label: 'Settings', icon: <Settings size={18} /> },
   ];
 
   const avatarLetter = (user?.displayName || 'U').charAt(0).toUpperCase();
@@ -29,24 +45,15 @@ export default function Sidebar({ user, onLogout, activePage, onNavigate }) {
   const handleAvatarError = useCallback(() => setAvatarImgFailed(true), []);
 
   return (
-    <motion.aside
-      className="sidebar-nav"
-      animate={{ width: open ? 204 : 60 }}
-      transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
-      {/* Logo */}
+    <aside className="sidebar-nav">
+      {/* Brand */}
       <div className="sidebar-nav-logo">
-        <div className="sidebar-nav-logo-icon">⚡</div>
-        <motion.span
-          className="sidebar-nav-logo-text"
-          animate={{ opacity: open ? 1 : 0, x: open ? 0 : -8 }}
-          transition={{ duration: 0.22 }}
-          style={{ display: open ? 'inline-block' : 'none' }}
-        >
-          API Secure
-        </motion.span>
+        <img
+          src="/app-logo.svg"
+          alt="API Secure"
+          className="sidebar-app-logo"
+        />
+        <span className="sidebar-nav-logo-text">API Secure</span>
       </div>
 
       {/* Nav links */}
@@ -55,18 +62,11 @@ export default function Sidebar({ user, onLogout, activePage, onNavigate }) {
           <button
             key={link.id}
             className={`sidebar-nav-link${activePage === link.id ? ' active' : ''}`}
-            onClick={() => onNavigate(link.id)}
+            onClick={() => navigate(PAGE_TO_PATH[link.id])}
             title={link.label}
           >
             <span className="sidebar-nav-icon">{link.icon}</span>
-            <motion.span
-              className="sidebar-nav-label"
-              animate={{ opacity: open ? 1 : 0, x: open ? 0 : -10 }}
-              transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-              style={{ display: open ? 'inline-block' : 'none' }}
-            >
-              {link.label}
-            </motion.span>
+            <span className="sidebar-nav-label">{link.label}</span>
           </button>
         ))}
       </div>
@@ -89,14 +89,7 @@ export default function Sidebar({ user, onLogout, activePage, onNavigate }) {
           ) : (
             <div className="sidebar-nav-avatar" title={user?.displayName || 'User'}>{avatarLetter}</div>
           )}
-          <motion.span
-            className="sidebar-nav-username"
-            animate={{ opacity: open ? 1 : 0, x: open ? 0 : -10 }}
-            transition={{ duration: 0.25 }}
-            style={{ display: open ? 'block' : 'none' }}
-          >
-            {user?.displayName || 'User'}
-          </motion.span>
+          <span className="sidebar-nav-username">{user?.displayName || 'User'}</span>
         </div>
 
         {/* Logout */}
@@ -107,18 +100,13 @@ export default function Sidebar({ user, onLogout, activePage, onNavigate }) {
           title="Logout"
         >
           <span className="sidebar-nav-icon">
-            <LogOut size={20} className={isLoggingOut ? 'sidebar-pulse' : ''} />
+            <LogOut size={18} className={isLoggingOut ? 'sidebar-pulse' : ''} />
           </span>
-          <motion.span
-            className="sidebar-nav-label"
-            animate={{ opacity: open ? 1 : 0, x: open ? 0 : -10 }}
-            transition={{ duration: 0.25 }}
-            style={{ display: open ? 'inline-block' : 'none' }}
-          >
-            {isLoggingOut ? 'Signing out...' : 'Logout'}
-          </motion.span>
+          <span className="sidebar-nav-label">
+            {isLoggingOut ? 'Signing out…' : 'Logout'}
+          </span>
         </button>
       </div>
-    </motion.aside>
+    </aside>
   );
 }
