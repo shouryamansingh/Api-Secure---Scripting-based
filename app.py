@@ -86,6 +86,15 @@ def index():
     }), 200
 
 
+@app.errorhandler(404)
+def spa_fallback(err):
+    """Serve the React app for client-side routes (e.g. /scanner) on refresh or direct visit."""
+    index_path = os.path.join(app.root_path, app.static_folder or "", "index.html")
+    if request.method == "GET" and not request.path.startswith("/api/") and os.path.isfile(index_path):
+        return send_from_directory(app.static_folder, "index.html")
+    return err
+
+
 @app.get("/api/health")
 def health():
     return jsonify({"status": "ok", "service": "API Secure"})
