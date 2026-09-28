@@ -2,6 +2,7 @@
 
 **Python (Flask)** backend + **React (Vite)** frontend for API security scanning: headers, CORS, SSL/TLS, server disclosure, error handling, URL tampering. Minimalist black & white theme with light/dark toggle. Configuration via environment variables; see [SECURITY.md](./SECURITY.md) for secure coding practices.
 
+**▶ [Watch the demo video](./docs/demo.mp4)** — a 2-minute narrated walkthrough of scanning, reports, and Test Curl.  
 **→ [SETUP.md](./SETUP.md)** — **start here**: full step-by-step setup from scratch (Python, Node, Firebase login and Firestore profiles, running locally, troubleshooting).  
 **→ [security-controls/](./security-controls/)** — modular security control definitions (prompts, config, schemas) for HTTP Header Analysis; usable in n8n or in-app AI.
 
