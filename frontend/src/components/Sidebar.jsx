@@ -50,10 +50,10 @@ export default function Sidebar({ user, onLogout }) {
       <div className="sidebar-nav-logo">
         <img
           src="/app-logo.svg"
-          alt="API Secure"
+          alt="Securo"
           className="sidebar-app-logo"
         />
-        <span className="sidebar-nav-logo-text">API Secure</span>
+        <span className="sidebar-nav-logo-text">Securo</span>
       </div>
 
       {/* Nav links */}

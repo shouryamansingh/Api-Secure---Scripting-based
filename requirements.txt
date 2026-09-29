@@ -1,4 +1,4 @@
-# API Secure backend — pinned for reproducible builds
+# Securo backend — pinned for reproducible builds
 flask>=3.0.0,<4
 requests>=2.31.0,<3
 openpyxl>=3.1.0,<4

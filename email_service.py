@@ -33,7 +33,7 @@ def _escape(s):
     return html.escape(str(s).strip())
 
 
-# ── n8n "Working API Secure" combined report theme ──────────────────────────
+# ── n8n "Working Securo" combined report theme ──────────────────────────
 _COMBINED_STYLES = """
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f5f5f5;line-height:1.6;color:#333;}
@@ -245,7 +245,7 @@ def _build_single_result_sections(r):
 
 
 def build_html_report(scan_result):
-    """Build combined HTML report matching the Working API Secure n8n theme."""
+    """Build combined HTML report matching the Working Securo n8n theme."""
     if scan_result.get("batch") and scan_result.get("results"):
         results = scan_result["results"]
     else:
@@ -289,9 +289,9 @@ def build_html_report(scan_result):
   </div>
   {sections_html}
   <div class="main-footer">
-    <h3>&#128274; API Secure Scanner</h3>
+    <h3>&#128274; Securo Scanner</h3>
     <p>Scan &middot; Analyze &middot; Report</p>
-    <p>&copy; {year} API Secure &mdash; Keep your APIs secure with regular audits</p>
+    <p>&copy; {year} Securo &mdash; Keep your APIs secure with regular audits</p>
   </div>
 </div>
 </body>
@@ -353,17 +353,17 @@ def send_report(recipient_emails_str, scan_result):
     emails = _parse_emails(recipient_emails_str)
     if not emails:
         return False, "No valid recipient email addresses."
-    subject = "API Secure – Security report"
+    subject = "Securo – Security report"
     if scan_result.get("batch") and scan_result.get("results"):
         urls = scan_result.get("results", [])
         if urls:
             first = urls[0].get("url") or urls[0].get("targetDomain") or "API"
-            subject = f"API Secure – Security report ({len(urls)} URLs)"
+            subject = f"Securo – Security report ({len(urls)} URLs)"
         else:
-            subject = "API Secure – Security report"
+            subject = "Securo – Security report"
     else:
         url = (scan_result or {}).get("url") or (scan_result or {}).get("targetDomain") or "API"
-        subject = f"API Secure – Security report for {str(url)[:50]}"
+        subject = f"Securo – Security report for {str(url)[:50]}"
     html_body = build_html_report(scan_result)
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject[:998]

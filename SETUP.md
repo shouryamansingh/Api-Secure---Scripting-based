@@ -1,4 +1,4 @@
-# Setup Guide — API Secure
+# Setup Guide — Securo
 
 A step-by-step guide to get this project running on a new machine from scratch.
 Follow the steps in order. Total time: about 20 minutes.
@@ -228,7 +228,7 @@ Go to **http://localhost:5173** and sign in with Google.
 > is also the address allowed in Firebase.
 
 To check the backend is alive on its own, open **http://localhost:3001/api/health** —
-it should show `{"service": "API Secure", "status": "ok"}`.
+it should show `{"service": "Securo", "status": "ok"}`.
 
 ---
 

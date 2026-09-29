@@ -102,7 +102,7 @@ export default function LoginPage({ onLogin, theme, toggleTheme }) {
           <div className="login-form-inner">
             <h1 className="login-title animate-element animate-delay-200">Welcome Back</h1>
             <p className="login-description animate-element animate-delay-300">
-              Sign in to access your API Secure account
+              Sign in to access your Securo account
             </p>
 
             <form onSubmit={handleSubmit} className="login-form">
@@ -179,7 +179,7 @@ export default function LoginPage({ onLogin, theme, toggleTheme }) {
 
             {/* Create Account hint */}
             <p className="animate-element animate-delay-1000 login-switch-text">
-              New to API Secure?{' '}
+              New to Securo?{' '}
               <a
                 href="#"
                 onClick={(e) => {
@@ -208,7 +208,7 @@ export default function LoginPage({ onLogin, theme, toggleTheme }) {
           </div>
           <div className="login-robot-overlay">
             <div className="login-robot-text">
-              <h2 className="login-robot-title">API Secure</h2>
+              <h2 className="login-robot-title">Securo</h2>
               <p className="login-robot-subtitle">Ease your testing</p>
             </div>
           </div>

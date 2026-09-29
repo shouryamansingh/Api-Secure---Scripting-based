@@ -3351,12 +3351,12 @@ function Dashboard({ user, onLogout }) {
         <div className="header-left">
           <img
             src="/app-logo.svg"
-            alt="API Secure"
+            alt="Securo"
             className="header-app-logo"
           />
           <div className="header-divider" aria-hidden />
           <div className="header-title-block">
-            <h1>API SECURE</h1>
+            <h1>SECURO</h1>
             <p className="header-eyebrow">Security Scanner</p>
           </div>
         </div>

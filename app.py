@@ -1,5 +1,5 @@
 """
-API Secure — API security scanning backend.
+Securo — API security scanning backend.
 Headers, CORS, SSL/TLS, server disclosure, error handling, URL tampering.
 Configuration via environment variables; see .env.example.
 """
@@ -80,7 +80,7 @@ def index():
     if os.path.isfile(path):
         return send_from_directory(app.static_folder, "index.html")
     return jsonify({
-        "service": "API Secure",
+        "service": "Securo",
         "message": "API is running. For the UI, run: cd frontend && npm run dev",
         "docs": "/api/health",
     }), 200
@@ -97,7 +97,7 @@ def spa_fallback(err):
 
 @app.get("/api/health")
 def health():
-    return jsonify({"status": "ok", "service": "API Secure"})
+    return jsonify({"status": "ok", "service": "Securo"})
 
 
 def _normalize_url(u: str) -> str:

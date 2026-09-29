@@ -123,7 +123,7 @@ export default function OpticalAnimation({ onComplete }) {
         </>
       )}
 
-      {/* Phase 2: Transform — "API Secure" */}
+      {/* Phase 2: Transform — "Securo" */}
       {phase === 'transform' && (
         <div className="optical-center">
           <motion.div
@@ -148,7 +148,7 @@ export default function OpticalAnimation({ onComplete }) {
             transition={{ duration: 1.5, times: [0, 0.5, 1], ease: [0.16, 1, 0.3, 1] }}
             style={{ color: bgColor === '#000000' ? '#FFFFFF' : '#000000' }}
           >
-            API Secure
+            Securo
           </motion.h1>
         </div>
       )}

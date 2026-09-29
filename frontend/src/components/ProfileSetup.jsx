@@ -217,7 +217,7 @@ export default function ProfileSetup({ firebaseUser, theme, toggleTheme, onCompl
           </div>
           <div className="login-robot-overlay">
             <div className="login-robot-text">
-              <h2 className="login-robot-title">API Secure</h2>
+              <h2 className="login-robot-title">Securo</h2>
               <p className="login-robot-subtitle">Ease your testing</p>
             </div>
           </div>

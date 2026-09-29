@@ -289,8 +289,8 @@ def _call_one_model(api_key: str, key_idx: int, model: str,
     req_headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://api-secure.app",
-        "X-Title": "API Secure Scanner",
+        "HTTP-Referer": "https://securo.app",
+        "X-Title": "Securo Scanner",
     }
     combined_user = f"{system_prompt}\n\n---\n\n{user_content}"
     payload = {

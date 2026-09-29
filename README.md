@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ API Secure
+# 🛡️ Securo
 
 **Find the security gaps in your APIs and websites before attackers do.**
 
@@ -45,7 +45,7 @@ Scan any endpoint for common misconfigurations, get clear, evidence-backed findi
 
 Most real-world API breaches don't start with sophisticated exploits. They start with **simple misconfigurations**: a missing security header, a server that announces its exact software version, a CORS policy that trusts any origin, or an error page that leaks a stack trace.
 
-Checking for these usually means juggling several tools and reading raw output. **API Secure** puts it all in one place:
+Checking for these usually means juggling several tools and reading raw output. **Securo** puts it all in one place:
 
 1. **Scan.** Enter a URL and pick the checks to run.
 2. **Understand.** Every finding comes with a severity, the evidence, why it matters, and how to fix it.
@@ -301,7 +301,7 @@ The architecture can be extended to support **AI-powered analysis, intelligent v
 - Only `http://` and `https://` targets are accepted. Uploads are validated by type and size, and scans are capped per request.
 - Every backend response carries hardening headers (`nosniff`, `X-Frame-Options: DENY`, strict referrer policy).
 - No secrets are hard-coded. All configuration comes from environment variables.
-- Found a vulnerability in API Secure itself? Please follow the disclosure process in **[SECURITY.md](./SECURITY.md)**.
+- Found a vulnerability in Securo itself? Please follow the disclosure process in **[SECURITY.md](./SECURITY.md)**.
 
 ---
 
@@ -333,6 +333,6 @@ Engineered by **Faizan Q & Team**.
 
 <div align="center">
 
-⭐ If API Secure helped you, consider starring the repository.
+⭐ If Securo helped you, consider starring the repository.
 
 </div>
